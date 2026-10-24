@@ -1,0 +1,81 @@
+package ui
+
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"hookline/internal/style"
+)
+
+// helpModel renders the "?" overlay: every keyHint from keys.go in a
+// two-column layout, centred. It holds no state; the app treats it as a
+// pure view. Narrow terminals fall back to a single column.
+type helpModel struct{}
+
+// View renders the help panel sized to fit within width×height.
+func (helpModel) View(st style.Styles, width, height int) string {
+	keyW := 0
+	for _, sec := range helpSections {
+		for _, h := range sec.hints {
+			if n := lipgloss.Width(h.key); n > keyW {
+				keyW = n
+			}
+		}
+	}
+	rows := make([][]string, 0, len(helpSections))
+	for _, sec := range helpSections {
+		rows = append(rows, []string{st.HelpTitle.Render(sec.title)})
+		for _, h := range sec.hints {
+			pad := strings.Repeat(" ", keyW-lipgloss.Width(h.key))
+			rows = append(rows, []string{
+				"  " + st.HelpKey.Render(h.key) + pad + "  " + st.HelpAction.Render(h.action)})
+		}
+		rows = append(rows, []string{""})
+	}
+	if n := len(rows); n > 0 && rows[n-1][0] == "" {
+		rows = rows[:n-1]
+	}
+
+	var panel string
+	if twoColumnFits(rows, width) {
+		half := (len(rows) + 1) / 2
+		left := columnBlock(rows[:half])
+		right := columnBlock(rows[half:])
+		panel = st.HelpPanel.Render(lipgloss.JoinHorizontal(lipgloss.Top, left, "   ", right))
+	} else {
+		panel = st.HelpPanel.Render(columnBlock(rows))
+	}
+
+	if width > 0 && height > 0 {
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, panel)
+	}
+	return panel
+}
+
+// twoColumnFits reports whether splitting rows side-by-side stays within
+// width, using the widest row as the column estimate.
+func twoColumnFits(rows [][]string, width int) bool {
+	if len(rows) < 6 {
+		return false
+	}
+	widest := 0
+	for _, r := range rows {
+		if n := lipgloss.Width(r[0]); n > widest {
+			widest = n
+		}
+	}
+	// 2 columns + 3-space gap + panel padding (1,3).
+	return widest*2+3+6 <= width
+}
+
+func columnBlock(rows [][]string) string {
+	var b strings.Builder
+	for i, r := range rows {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(r[0])
+	}
+	return b.String()
+}
