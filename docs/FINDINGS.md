@@ -1,4 +1,4 @@
-# FINDINGS — hardening campaign results (v0.2)
+# FINDINGS — hardening campaign results (v0.1.1)
 
 Outcome of the adversarial-testing campaign over the v0.1 MVP: bugs found
 and fixed, improvements shipped, what is left for later. Companion to
@@ -131,12 +131,12 @@ connections can trip OS SYN handling; `TestProbeListenerBurst500`).
 ## 4. Verification
 
 - `gofmt -l .` prints nothing; `go vet ./...` is clean; a full build
-  with `-ldflags "-X main.version=0.2.0"` succeeds and `--version`
-  prints `hookline 0.2.0`.
+  with `-ldflags "-X main.version=0.1.1"` succeeds and `--version`
+  prints `hookline 0.1.1`.
 - `go test -count=1 -timeout 300s ./...` — all six packages ok: **136
   test functions** (8/17/15/15/16/65); `internal/ui` is 26 behavior
   tests plus 39 adversarial probes.
-- **End-to-end capture (live, v0.2.0 binary)**: ran `bin/hookline.exe`
+- **End-to-end capture (live, v0.1.1 binary)**: ran `bin/hookline.exe`
   with a throwaway `HOOKLINE_DATA_DIR`, POSTed a JSON webhook with a
   custom header mid-run — auto-response 200, and the JSONL record landed
   with id, timestamp, headers, base64 body, source IP and response

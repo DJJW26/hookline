@@ -47,7 +47,7 @@ binary, and it blends into whatever terminal you already customized.
 
 ## Install
 
-Requires Go 1.23+:
+Requires Go 1.27+:
 
     go install ./cmd/hookline@latest   # once published
 
@@ -62,7 +62,7 @@ Or build from a checkout:
     curl -X POST http://127.0.0.1:4040/test -d '{"hello":"world"}'
 
 For real providers (Stripe, GitHub, …), expose the listener with any tunnel
-you like — `cloudrail tunnel --url http://127.0.0.1:4040`,
+you like — `cloudflared tunnel --url http://127.0.0.1:4040`,
 `ngrok http 4040` — and point the webhook at the public URL. A built-in
 tunnel is on the roadmap.
 
@@ -104,10 +104,10 @@ OSC 52.
 
 ## Status
 
-Pre-release working MVP. See `SPEC.md` for the product spec and
-`docs/ARCHITECTURE.md` for how it works. Roadmap: built-in Cloudflare quick
-tunnel, side-by-side delivery diffing, in-TUI body editor, `--json`
-headless mode.
+v0.1.1 — working MVP, hardened per `docs/FINDINGS.md`. See `SPEC.md` for
+the product spec and `docs/ARCHITECTURE.md` for how it works. Roadmap:
+built-in Cloudflare quick tunnel, side-by-side delivery diffing, in-TUI
+body editor, `--json` headless mode.
 
 MIT licensed. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 and [Lip Gloss](https://github.com/charmbracelet/lipgloss).

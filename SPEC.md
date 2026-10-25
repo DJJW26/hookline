@@ -1,6 +1,7 @@
 # Hookline — Webhook Inspector TUI — Implementation Spec
 
-**Status:** v1, implemented (working MVP in this repository)
+**Status:** v1, implemented (working MVP in this repository); hardened in
+v0.1.1 — see `docs/FINDINGS.md`
 **Name:** **Hookline** (decided 2026-10-24; folder, module and binary all `hookline`)
 **Stack:** Go + Charm (Bubble Tea, Lip Gloss, Bubbles, Huh)
 

@@ -28,9 +28,9 @@ the core, not the other way round.
 |---|---|---|
 | `internal/delivery` | The shared `Delivery` record + body-kind sniffing | The contract type; bodies are `[]byte` (base64 in JSON) so binary round-trips |
 | `internal/listener` | HTTP capture server | Any method/path; 10 MiB body cap; replies `--status` (default 200) with an `X-Hookline-ID` header |
-| `internal/store` | JSONL persistence | Append-only, crash-safe (torn lines skipped on read), 2 MiB stored-body cap |
-| `internal/replay` | Resend + cURL export | Strips hop-by-hop headers; `DisableCompression` client so `Accept-Encoding` isn't re-added; shell-safe quoting |
-| `internal/style` | Every color, border, glyph | Theme registry (`dark`/`light`/`mono`) + `Styles` sheet; UI never builds a raw style |
+| `internal/store` | JSONL persistence | Append-only, crash-safe (torn lines skipped on read), 2 MiB stored-body cap; `Rotate` archives history aside instead of destroying it |
+| `internal/replay` | Resend + cURL export | Strips hop-by-hop headers; `DisableCompression` client so `Accept-Encoding` isn't re-added; never follows redirects and keeps the target's response head (≤ 16 KiB, `MaxResultBody`); shell-safe quoting |
+| `internal/style` | Every color, border, glyph | Theme registry (`dark`/`light`/`mono`) + `Styles` sheet; UI never builds a raw style; wrapping is wordwrap followed by a hard wrap (`Styles.Wrap`), so unbreakable tokens can never overflow a frame |
 | `internal/ui` | The Bubble Tea app | Elm-architecture model; owns layout, keys, modes |
 | `cmd/hookline` | Wiring | Flags → theme/data-dir → store → listener → program |
 
@@ -39,7 +39,10 @@ the core, not the other way round.
 1. `cmd/hookline` starts the listener with an `OnDelivery` callback.
 2. A POST arrives. The handler reads up to 10 MiB of body, clones the
    headers, stamps an ID (`unixmillis-<rand hex>`) and builds a
-   `Delivery`. It replies immediately, *then* invokes the callback.
+   `Delivery`. It replies immediately, *then* invokes the callback. A
+   client aborting mid-body is the one exception: the read errors, the
+   handler answers 400 and records NOTHING — a torn capture is noise,
+   not signal.
 3. The callback does two things, in order: `store.Append` (flush-to-disk
    before anything else — a crash never loses a capture) and a
    non-blocking push into a 1024-slot channel (drop instead of blocking
@@ -48,8 +51,8 @@ the core, not the other way round.
    turns the channel read into a `deliveryMsg`. `Update` prepends it to
    the model (newest first), marks it unread, re-arms the pump.
 5. `View` renders the frame. Rendering is cached per
-   `(delivery ID, tab, width)` so a 5 MiB body is tokenized once, and
-   only its first 100 KiB is ever rendered per frame.
+   `(delivery ID, tab, width, replayed)` so a 5 MiB body is tokenized
+   once, and only its first 100 KiB is ever rendered per frame.
 
 ## The UI model
 
@@ -70,6 +73,15 @@ sub-models, following the Elm architecture: messages in, new state out,
   the frame), status line (hints or a 4-second toast). Two invariants
   hold at every size and are enforced by tests: every line fits the
   terminal width, and the frame is exactly the terminal height.
+- **Timestamps are date-aware** (`format.go` `dayTime`): today renders
+  `15:04:05`, this week `Mon 15:04`, older `Jan 02 15:04` — the row math
+  measures the rendered width, since it varies by age.
+- **Replay memory** (`app.go`): the last replay outcome per delivery is
+  remembered (map capped at 64 entries) — list rows carry a replay
+  status badge in the meta column, and the detail pane's response tab
+  shows the target's actual answer (status, latency, target,
+  response-body head) instead of only the auto-response. Replay toasts
+  are colored by status class (≥400 bad, ≥300 warn, else good).
 - **Toasts** replace the status hints and clear via `tea.Tick`.
 - **Mouse**: wheel scrolls the focused pane; a click maps a screen row
   back to a delivery via the same layout math the renderer uses.
@@ -137,13 +149,19 @@ One JSON object per line in `hookline.jsonl` (bodies base64 via
 Appends flush per line; `LoadLast(n)` scans the file through a ring
 buffer and skips any corrupt/torn line, so a crash mid-write costs at
 most one delivery. On Windows, `Clear` closes the handle before
-truncating (append-mode handles deny truncation there).
+truncating (append-mode handles deny truncation there). Nothing is
+destroyed by `--fresh`: `Rotate` renames the history aside as
+`hookline-YYYYMMDD-HHMMSS.jsonl`, keeps the five most recent backups
+(oldest pruned) and starts a fresh file. The replay target persists
+separately in `config.json` in the same directory
+(`cmd/hookline/main.go`), so a new terminal never starts targetless.
 
 ## Testing strategy
 
 - **Core packages**: table-driven tests against `httptest` servers and
-  temp dirs — a 50-request concurrent burst, byte-identical replay
-  assertions, corrupt-tail reads, truncation caps.
+  temp dirs — a 200-request concurrent burst plus a 500-request burst
+  fired in waves of 50, byte-identical replay assertions, corrupt-tail
+  reads, truncation caps.
 - **UI**: model-level tests (`internal/ui/app_test.go`) drive `Update`
   with real messages and assert on `View` output — same reducer, same
   renderer as production, no terminal required, fully deterministic.
@@ -168,7 +186,7 @@ truncating (append-mode handles deny truncation there).
   following the same rules; surface the public URL through
   `ui.Config.ListenURL`.
 
-## Deliberate limitations (v0.1)
+## Deliberate limitations (v0.1.1)
 
 Bubble Tea **v1** is pinned, not v2: v1 is the maximally compatible,
 stable API across every terminal we target; the UI layer contains all

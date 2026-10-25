@@ -190,3 +190,15 @@ loosened accordingly).
 3. Rename module path, publish, add Homebrew/Scoop.
 4. Roadmap features from SPEC §5, starting with the built-in Cloudflare
    quick tunnel.
+
+---
+
+## Addendum (v0.1.1)
+
+An adversarial-testing hardening pass followed v0.1.0: the bugs fixed
+and improvements shipped are recorded in `docs/FINDINGS.md` (replay now
+keeps the target's response head and never follows redirects; torn
+captures are refused; layout is overflow-proof at any size; `--fresh`
+rotates history). The suite is now 136 test functions across six
+packages. This report reflects the v0.1.0 build and is left unedited
+above.
