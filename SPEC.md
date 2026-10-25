@@ -1,7 +1,7 @@
-# Webhook Inspector TUI — Implementation Spec
+# Hookline — Webhook Inspector TUI — Implementation Spec
 
-**Status:** v1, ready for implementation
-**Working title:** *Hookline* (placeholder — see §12 before publishing)
+**Status:** v1, implemented (working MVP in this repository)
+**Name:** **Hookline** (decided 2026-10-24; folder, module and binary all `hookline`)
 **Stack:** Go + Charm (Bubble Tea, Lip Gloss, Bubbles, Huh)
 
 > This document is self-contained. An implementing agent needs nothing beyond
@@ -251,11 +251,12 @@ Each milestone ends with the app runnable and `go test ./...` green.
 
 ## 12. Open decisions (maintainer)
 
-- Final name — candidates: *Hookline*, *Hookpit*, *Hookroom*. Check GitHub,
-  pkg.go.dev, and npm-less-crucial availability before committing. Directory
-  name is a placeholder.
-- Default port `4040` — confirm no collision with common dev tools.
-- Go module path (`github.com/<user>/<name>`) — set once, before first commit.
+- ~~Final name~~ — **decided 2026-10-24: Hookline.** Folder, Go module and
+  binary all use `hookline`. Still to check before public release: GitHub
+  org/repo availability and the module path rename below.
+- Default port `4040` — in use; no collisions observed.
+- Go module path is locally `hookline`; rename to
+  `github.com/<user>/hookline` once, immediately before publishing.
 
 ---
 
