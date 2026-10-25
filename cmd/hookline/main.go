@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -24,10 +25,18 @@ import (
 	"github.com/DJJW26/hookline/internal/ui"
 )
 
-// version is set at build time via -ldflags "-X main.version=…".
+// version is set at build time via -ldflags "-X main.version=…". When the
+// binary was built by `go install module@version` (no ldflags), it falls
+// back to the version Go recorded in the build info.
 var version = "dev"
 
 func main() {
+	if version == "dev" || version == "" {
+		if info, ok := debug.ReadBuildInfo(); ok &&
+			info.Main.Version != "" && info.Main.Version != "(devel)" {
+			version = info.Main.Version
+		}
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "hookline:", err)
 		os.Exit(1)
