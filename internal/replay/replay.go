@@ -12,11 +12,28 @@ import (
 	"time"
 
 	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/sign"
 )
 
 // MaxResultBody caps how much of the replay target's response is kept for
 // display: enough for stack traces and error JSON, never enough to hurt.
 const MaxResultBody = 16 << 10
+
+// config is the mutable option set applied by the functional options.
+type config struct {
+	signing *sign.Params
+}
+
+// Option customizes one replay without breaking existing callers.
+type Option func(*config)
+
+// WithSigning re-computes the provider's webhook signature over the replay
+// body (the possibly edited one) and overrides the signature header on the
+// outgoing request. Without it a replay to a signature-verifying provider
+// is rejected as tampered.
+func WithSigning(p sign.Params) Option {
+	return func(c *config) { c.signing = &p }
+}
 
 // Result reports the outcome of a replayed request.
 type Result struct {
@@ -54,9 +71,17 @@ var client = &http.Client{
 // path, query, headers and body, honoring ctx cancellation. Headers that are
 // hop-by-hop or transport-owned (Host, Content-Length, Connection,
 // Transfer-Encoding, Te, Upgrade, Proxy-*, Accept-Encoding) are not
-// forwarded. Transport-level failures are returned as errors; HTTP error
-// statuses are reported via Result.StatusCode with a nil error.
-func Do(ctx context.Context, target string, d delivery.Delivery) (Result, error) {
+// forwarded. With WithSigning the provider's signature headers are
+// recomputed over d's body and SET after the captured headers, so the
+// original signature never survives. Transport-level failures and signing
+// failures are returned as errors — a signing failure never falls back to
+// an unsigned send; HTTP error statuses are reported via Result.StatusCode
+// with a nil error.
+func Do(ctx context.Context, target string, d delivery.Delivery, opts ...Option) (Result, error) {
+	var cfg config
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	full := strings.TrimSuffix(target, "/") + d.URL()
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, d.Method, full, bytes.NewReader(d.Body))
@@ -69,6 +94,15 @@ func Do(ctx context.Context, target string, d delivery.Delivery) (Result, error)
 		}
 		for _, v := range values {
 			req.Header.Add(name, v)
+		}
+	}
+	if cfg.signing != nil {
+		headers, err := sign.Compute(*cfg.signing, d.Body)
+		if err != nil {
+			return Result{}, fmt.Errorf("replay: signing %s replay: %w", d.Method, err)
+		}
+		for name, value := range headers {
+			req.Header.Set(name, value) // override, never append
 		}
 	}
 	resp, err := client.Do(req)

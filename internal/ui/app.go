@@ -18,6 +18,7 @@ import (
 
 	"github.com/DJJW26/hookline/internal/delivery"
 	"github.com/DJJW26/hookline/internal/replay"
+	"github.com/DJJW26/hookline/internal/sign"
 	"github.com/DJJW26/hookline/internal/style"
 )
 
@@ -31,6 +32,12 @@ type Config struct {
 	Target     string              // default replay target ("" = unset)
 	OnClear    func()              // persists a clear request (wired to the store)
 	TargetSave func(target string) // persists a new replay target (wired to config.json)
+	// SignProvider enables signature re-signing on replay (from --sign):
+	// "" disables it; otherwise one of the internal/sign providers. When
+	// set, SignSecret (from HOOKLINE_SIGN_SECRET) must be too — a replay
+	// asked for signing but missing the secret is never sent.
+	SignProvider string
+	SignSecret   string
 	// Dropped, when non-nil, points at the live count of deliveries the
 	// capture callback dropped because the events channel was full. The
 	// status line shows the count whenever it is non-zero — drops are
@@ -535,6 +542,11 @@ func (m *Model) applyReplayResult(msg replayResultMsg) (tea.Model, tea.Cmd) {
 		kind = toastWarn
 	}
 	text := fmt.Sprintf("%d in %s — response tab for body", msg.res.StatusCode, msg.res.Duration.Round(time.Millisecond))
+	if msg.resigned != "" {
+		// The send completed (any status class): the request went out
+		// freshly signed, which is what the toast should say.
+		text += fmt.Sprintf(" · re-signed (%s)", msg.resigned)
+	}
 	return m, m.showToast(kind, subject, text)
 }
 
@@ -556,21 +568,38 @@ func (m *Model) applyEditorDone(msg editorDoneMsg) (tea.Model, tea.Cmd) {
 
 // replaySelected sends a delivery to the configured target. A non-loopback
 // target demands one confirming keypress first — the guard against
-// reflexively firing a production payload somewhere unexpected.
+// reflexively firing a production payload somewhere unexpected. When
+// signing is configured (cfg.SignProvider) the replay is re-signed for
+// that provider; a configured provider with a missing secret refuses to
+// send at all — an unsigned replay against a signature-verifying provider
+// is exactly the tampered request the provider will reject.
 func (m *Model) replaySelected(d delivery.Delivery) tea.Cmd {
 	if m.target == "" {
 		return m.showToast(toastWarn, "", "no replay target — press t to set one")
+	}
+	if m.cfg.SignProvider != "" && m.cfg.SignSecret == "" {
+		return m.showToast(toastWarn, "", "--sign "+m.cfg.SignProvider+
+			" is set but HOOKLINE_SIGN_SECRET is empty — replay not sent")
 	}
 	if !isLocalTarget(m.target) && !m.confirmRemote {
 		m.confirmRemote = true
 		return m.showToast(toastWarn, "", m.target+" is not local — press r again to send")
 	}
 	target := m.target
+	var opts []replay.Option
+	if m.cfg.SignProvider != "" {
+		opts = append(opts, replay.WithSigning(sign.Params{
+			Provider: m.cfg.SignProvider,
+			Secret:   m.cfg.SignSecret,
+			Time:     time.Now(),
+		}))
+	}
+	resigned := m.cfg.SignProvider
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		res, err := replay.Do(ctx, target, d)
-		return replayResultMsg{d: d, res: res, err: err}
+		res, err := replay.Do(ctx, target, d, opts...)
+		return replayResultMsg{d: d, res: res, err: err, resigned: resigned}
 	}
 }
 

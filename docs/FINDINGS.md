@@ -102,13 +102,13 @@ invariants live in `assertFrameFits`, `internal/ui/app_test.go`).
   `internal/store/store.go` `Rotate`).
 - **`http://` auto-prefix** on the target input, so `localhost:3000`
   works (`normalizeTarget`, `internal/ui/app.go`).
+- **Signature re-signing on replay** — the P0 from Recommended next,
+  shipped after the campaign: `--sign stripe|github|shopify` with
+  `HOOKLINE_SIGN_SECRET` re-signs every replay (edited bodies included)
+  for the provider's HMAC check (`internal/sign`).
 
 ## 3. Recommended next (not built)
 
-- **P0 — signature re-signing on replay**: Stripe/GitHub/Shopify verify
-  signatures, so a replayed capture is rejected as tampered. Add `--sign`
-  per provider (HMAC-SHA256 with `HOOKLINE_SIGN_SECRET`) recomputed on
-  resend; without it the replay loop stays open against those providers.
 - **P0 — batch replay of the filtered set** with per-row outcomes: the
   "re-send all 40 failed webhooks after I fix the server" workflow needs
   fan-out plus a visible pass/fail per row.
@@ -135,7 +135,10 @@ connections can trip OS SYN handling; `TestProbeListenerBurst500`).
   prints `hookline 0.1.1`.
 - `go test -count=1 -timeout 300s ./...` — all six packages ok: **136
   test functions** (8/17/15/15/16/65); `internal/ui` is 26 behavior
-  tests plus 39 adversarial probes.
+  tests plus 39 adversarial probes. (After the signature re-signing
+  batch the suite is 8 packages with 14 more test functions: the
+  `internal/sign` table, the replay/UI signing tests and the `--sign`
+  flag validation.)
 - **End-to-end capture (live, v0.1.1 binary)**: ran `bin/hookline.exe`
   with a throwaway `HOOKLINE_DATA_DIR`, POSTed a JSON webhook with a
   custom header mid-run — auto-response 200, and the JSONL record landed

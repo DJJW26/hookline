@@ -21,6 +21,7 @@ import (
 
 	"github.com/DJJW26/hookline/internal/delivery"
 	"github.com/DJJW26/hookline/internal/listener"
+	"github.com/DJJW26/hookline/internal/sign"
 	"github.com/DJJW26/hookline/internal/store"
 	"github.com/DJJW26/hookline/internal/style"
 	"github.com/DJJW26/hookline/internal/ui"
@@ -51,6 +52,7 @@ func run() error {
 		status  = flag.Int("status", 200, "status code the listener replies with")
 		target  = flag.String("target", "", "default replay target, e.g. http://localhost:3000")
 		themeID = flag.String("theme", "auto", "theme: auto, "+strings.Join(style.IDs(), ", "))
+		signP   = flag.String("sign", "", "re-sign replayed bodies for a provider: stripe, github, shopify")
 		fresh   = flag.Bool("fresh", false, "start with an empty history")
 		showVer = flag.Bool("version", false, "print version and exit")
 	)
@@ -60,6 +62,12 @@ func run() error {
 		fmt.Println("hookline", version)
 		return nil
 	}
+	if err := checkSignProvider(*signP); err != nil {
+		return err
+	}
+	// The webhook secret never rides on the command line (it would leak
+	// into shell history); it comes from the environment instead.
+	signSecret := os.Getenv("HOOKLINE_SIGN_SECRET")
 
 	theme, err := style.Detect(*themeID)
 	if err != nil {
@@ -136,6 +144,8 @@ func run() error {
 			cfgFile.Target = t
 			_ = saveConfig(dataDir, cfgFile)
 		},
+		SignProvider: *signP,
+		SignSecret:   signSecret,
 	}, style.New(theme), theme)
 
 	// Bubble Tea installs its own SIGINT/SIGTERM handlers that restore the
@@ -153,6 +163,22 @@ func run() error {
 	}
 	close(events)
 	return nil
+}
+
+// checkSignProvider validates the --sign flag value at startup: unknown
+// providers are a flag error listing what is supported, so a typo never
+// silently sends unsigned replays.
+func checkSignProvider(p string) error {
+	if p == "" {
+		return nil
+	}
+	for _, known := range sign.Supported() {
+		if p == known {
+			return nil
+		}
+	}
+	return fmt.Errorf("--sign %q: unknown provider (supported: %s)",
+		p, strings.Join(sign.Supported(), ", "))
 }
 
 // appConfig is the small persisted settings file in the data dir. Fields

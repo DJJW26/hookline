@@ -17,11 +17,14 @@ type deliveryMsg delivery.Delivery
 // deliveriesDoneMsg is sent when the events channel closes.
 type deliveriesDoneMsg struct{}
 
-// replayResultMsg reports the outcome of a replay attempt.
+// replayResultMsg reports the outcome of a replay attempt. resigned, when
+// non-empty, names the provider the request was re-signed for so the toast
+// can say so.
 type replayResultMsg struct {
-	d   delivery.Delivery
-	res replay.Result
-	err error
+	d        delivery.Delivery
+	res      replay.Result
+	err      error
+	resigned string
 }
 
 // editorDoneMsg is sent after $EDITOR exits; body is the edited payload.

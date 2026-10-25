@@ -37,6 +37,10 @@ binary, and it blends into whatever terminal you already customized.
   The target's answer lands in the response tab; toasts are colored by
   status class. Non-loopback targets ask for a confirming second `r`, and
   the target persists to `config.json` between runs.
+- **Signature re-signing** — signature re-signing for Stripe, GitHub and
+  Shopify so replays verify: start with `--sign stripe` and
+  `HOOKLINE_SIGN_SECRET` and every resend (edited bodies included) carries
+  a fresh signature. A missing secret refuses to send — never unsigned.
 - **Export** — copy any delivery as a shell-safe cURL command (`c`) or the
   raw body (`y`). Copies use OSC 52, so they work inside SSH sessions.
 - **Persistent** — history survives restarts as JSONL on disk
@@ -95,11 +99,14 @@ registry entries, so adding one is a single struct.
     --port 4040        listen port            --status 200   reply status
     --bind 127.0.0.1   listen address         --target URL   default replay target
     --theme auto       dark|light|mono|auto   --fresh        rotate history aside
+    --sign P           re-sign replays: stripe|github|shopify
     --version
 
 History is JSONL in `%LOCALAPPDATA%\hookline` (Windows) or
 `$XDG_DATA_HOME/hookline` (elsewhere); override with `HOOKLINE_DATA_DIR`.
-The replay target lives in `config.json` next to it. Copies fall back to
+The replay target lives in `config.json` next to it. With `--sign`, the
+webhook secret comes from `HOOKLINE_SIGN_SECRET` (`whsec_…` Stripe secrets
+are decoded automatically). Copies fall back to
 `HOOKLINE_CLIP_CMD` (e.g. `clip.exe`, `wl-copy`) on terminals without
 OSC 52.
 
