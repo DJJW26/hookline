@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // Edge-case probes: unusual methods, encoded paths, duplicate headers,

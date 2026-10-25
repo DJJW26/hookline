@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // probeCapture is a callback that records deliveries and counts them.

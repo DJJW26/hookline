@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // Edge-case probes: corrupt interior lines, append-after-clear, LoadLast

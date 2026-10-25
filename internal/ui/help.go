@@ -5,7 +5,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/style"
 )
 
 // helpModel renders the "?" overlay: every keyHint from keys.go in a

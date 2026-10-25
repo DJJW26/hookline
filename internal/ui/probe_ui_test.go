@@ -18,8 +18,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"hookline/internal/delivery"
-	"hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/style"
 )
 
 // --- probe helpers -------------------------------------------------------

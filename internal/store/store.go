@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // MaxBodyBytes is the body size limit enforced by Append; larger bodies are

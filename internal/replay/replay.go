@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // MaxResultBody caps how much of the replay target's response is kept for

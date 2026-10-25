@@ -5,7 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 
-	"hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/style"
 )
 
 // inputModel is a minimal single-line text input. It exists so the project

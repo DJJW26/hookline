@@ -15,9 +15,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"hookline/internal/delivery"
-	"hookline/internal/replay"
-	"hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/replay"
+	"github.com/DJJW26/hookline/internal/style"
 )
 
 // Config wires the app to its environment. Everything here is injectable,

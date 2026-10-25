@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 func TestShellQuote(t *testing.T) {

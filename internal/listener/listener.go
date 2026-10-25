@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // defaultMaxBodyBytes caps captured bodies when Config.MaxBodyBytes is unset.

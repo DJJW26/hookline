@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // ToCurl renders d as a one-line cURL command targeting baseURL+path+query,

@@ -13,8 +13,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"hookline/internal/delivery"
-	"hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/style"
 )
 
 // UI tests run at the model level: feed messages into Update, assert on

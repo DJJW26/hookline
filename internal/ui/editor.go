@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // The edit-and-resend flow: the payload round-trips through the user's real

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // Formatting helpers. Small, pure, uniform: one way to render a size, one

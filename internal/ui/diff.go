@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	"hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/style"
 )
 
 // Line diff for the edit-and-resend review. A compact LCS dynamic program

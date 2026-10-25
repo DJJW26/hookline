@@ -49,11 +49,11 @@ binary, and it blends into whatever terminal you already customized.
 
 Requires Go 1.27+:
 
-    go install ./cmd/hookline@latest   # once published
+    go install github.com/DJJW26/hookline/cmd/hookline@latest
 
 Or build from a checkout:
 
-    git clone <repo> && cd hookline
+    git clone https://github.com/DJJW26/hookline.git && cd hookline
     go build -o hookline ./cmd/hookline
 
 ## Quickstart

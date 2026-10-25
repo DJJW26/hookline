@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // Edge-case probes: redirect handling, timeouts, trailing-slash targets,

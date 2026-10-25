@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // reqSpec describes one request the test fires and what must be captured.

@@ -1,4 +1,4 @@
-module hookline
+module github.com/DJJW26/hookline
 
 go 1.27.2
 

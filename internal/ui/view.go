@@ -6,8 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"hookline/internal/delivery"
-	"hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/style"
 )
 
 // Layout and top-level view composition.

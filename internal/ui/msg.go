@@ -3,8 +3,8 @@ package ui
 import (
 	"time"
 
-	"hookline/internal/delivery"
-	"hookline/internal/replay"
+	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/replay"
 )
 
 // Messages exchanged inside the UI. Everything asynchronous (listener

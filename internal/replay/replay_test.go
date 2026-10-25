@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // capturedReq snapshots everything the test server received.

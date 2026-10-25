@@ -17,11 +17,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"hookline/internal/delivery"
-	"hookline/internal/listener"
-	"hookline/internal/store"
-	"hookline/internal/style"
-	"hookline/internal/ui"
+	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/listener"
+	"github.com/DJJW26/hookline/internal/store"
+	"github.com/DJJW26/hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/ui"
 )
 
 // version is set at build time via -ldflags "-X main.version=…".

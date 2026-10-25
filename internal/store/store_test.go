@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/delivery"
 )
 
 // mkDelivery builds a uniquely identifiable delivery for ordering checks.

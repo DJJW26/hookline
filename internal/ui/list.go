@@ -6,8 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"hookline/internal/delivery"
-	"hookline/internal/style"
+	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/style"
 )
 
 // listModel is the deliveries pane. Selection is tracked by delivery ID, not

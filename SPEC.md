@@ -2,7 +2,7 @@
 
 **Status:** v1, implemented (working MVP in this repository); hardened in
 v0.1.1 — see `docs/FINDINGS.md`
-**Name:** **Hookline** (decided 2026-10-24; folder, module and binary all `hookline`)
+**Name:** **Hookline** (folder/binary `hookline`; Go module `github.com/DJJW26/hookline`)
 **Stack:** Go + Charm (Bubble Tea, Lip Gloss, Bubbles, Huh)
 
 > This document is self-contained. An implementing agent needs nothing beyond
@@ -256,8 +256,9 @@ Each milestone ends with the app runnable and `go test ./...` green.
   binary all use `hookline`. Still to check before public release: GitHub
   org/repo availability and the module path rename below.
 - Default port `4040` — in use; no collisions observed.
-- Go module path is locally `hookline`; rename to
-  `github.com/<user>/hookline` once, immediately before publishing.
+- ~~Go module path~~ — **decided 2026-10-25: `github.com/DJJW26/hookline`.**
+  Renamed (go.mod, imports, install line); tag v0.1.2 is the first installable
+  release.
 
 ---
 
