@@ -27,7 +27,8 @@ binary, and it blends into whatever terminal you already customized.
 ## Features
 
 - **Capture everything** — any method, path, header, content type; JSON,
-  urlencoded forms, or binary (hex view). Bursts are queued, nothing drops.
+  urlencoded forms, or binary (hex view). Bursts are queued,
+  backpressure-aware: drops are counted and shown, never silently lost.
 - **Inspect fast** — syntax-highlighted JSON, aligned headers, raw bytes,
   auto-response; unread markers for new arrivals; live search (`/`, matches
   headers too) and method filter (`f`).

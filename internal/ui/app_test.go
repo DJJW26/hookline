@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -536,5 +537,183 @@ func TestSearchMatchesBodyWithinCap(t *testing.T) {
 	// Haystack built once and reused.
 	if h := m.haystack(m.items[0]); !strings.Contains(h, "needle") {
 		t.Error("haystack missing body text")
+	}
+}
+
+// --- running byte counter + cache eviction (leak fixes) ---
+
+func TestNewSeedsSessionBytes(t *testing.T) {
+	// The counter must start consistent with the initial history, or the
+	// cap enforcement drifts from the first delivery on.
+	initial := []delivery.Delivery{
+		testDelivery("POST", "/a", strings.Repeat("x", 100)),
+		testDelivery("GET", "/b", strings.Repeat("y", 50)),
+	}
+	m := newTestApp(t, initial)
+	if m.sessionBytes != 150 {
+		t.Errorf("New seeded counter = %d, want 150", m.sessionBytes)
+	}
+	if m.sessionBytes != sessionBytes(m.items) {
+		t.Errorf("counter %d diverges from body sum %d", m.sessionBytes, sessionBytes(m.items))
+	}
+}
+
+func TestSessionBytesTracksRunningCounter(t *testing.T) {
+	m := newTestApp(t, nil)
+	bodies := []string{`{"i":1}`, strings.Repeat("x", 512), `{"pad":"` + strings.Repeat("y", 100) + `"}`}
+	var want int
+	for i, b := range bodies {
+		d := testDelivery("POST", fmt.Sprintf("/c/%d", i), b)
+		model, _ := m.Update(deliveryMsg(d))
+		*m = *model.(*Model)
+		want += len(d.Body)
+		if m.sessionBytes != want {
+			t.Fatalf("counter after delivery %d = %d, want %d", i, m.sessionBytes, want)
+		}
+		// The running counter must never diverge from the actual sum.
+		if m.sessionBytes != sessionBytes(m.items) {
+			t.Errorf("counter %d diverges from body sum %d", m.sessionBytes, sessionBytes(m.items))
+		}
+	}
+}
+
+func TestEditorDoneDoesNotTouchSessionBytes(t *testing.T) {
+	// Edited copies go to the diff review, never into items: no accounting.
+	in := testDelivery("POST", "/p", `{"a":1}`)
+	m := newTestApp(t, []delivery.Delivery{in})
+	before := m.sessionBytes
+	msg := editorDoneMsg{d: in, body: []byte(`{"a":2}`)}
+	model, _ := m.Update(msg)
+	*m = *model.(*Model)
+	if len(m.items) != 1 {
+		t.Fatalf("items = %d, want 1 (edited copy must not enter items)", len(m.items))
+	}
+	if m.sessionBytes != before {
+		t.Errorf("counter = %d, want unchanged %d", m.sessionBytes, before)
+	}
+}
+
+func TestEvictOldDropsCachesWithOldest(t *testing.T) {
+	m := newTestApp(t, nil)
+	var ids []string // newest first, matching items order
+	for i := 0; i < 3; i++ {
+		d := testDelivery("POST", fmt.Sprintf("/e/%d", i), fmt.Sprintf(`{"i":%d}`, i))
+		model, _ := m.Update(deliveryMsg(d))
+		*m = *model.(*Model)
+		ids = append([]string{d.ID}, ids...)
+	}
+	// Warm every per-delivery cache for all three.
+	for _, it := range m.items {
+		m.haystack(it)
+		if _, ok := m.detail.prettyJSON(it); !ok {
+			t.Fatalf("body %q should parse as JSON", it.Body)
+		}
+		m.list.markUnread(it.ID)
+	}
+	m.replayByID[ids[2]] = replayInfo{target: "http://127.0.0.1:9999"}
+	if len(m.searchCache) != 3 || len(m.detail.prettyCache) != 3 || len(m.list.unread) != 3 || len(m.replayByID) != 1 {
+		t.Fatalf("cache setup incomplete: search=%d pretty=%d unread=%d replay=%d",
+			len(m.searchCache), len(m.detail.prettyCache), len(m.list.unread), len(m.replayByID))
+	}
+
+	// maxSessionBytes is 256 MiB — driving it with real bodies would
+	// allocate a quarter gigabyte in a unit test, so (like
+	// TestProbeEvictionKeepsAtLeastOne) fabricate an over-cap counter
+	// sized to evict exactly the oldest delivery (ids[2], items tail).
+	oldest := m.items[len(m.items)-1]
+	if oldest.ID != ids[2] {
+		t.Fatalf("items order changed: oldest = %s, want %s", oldest.ID, ids[2])
+	}
+	m.sessionBytes = maxSessionBytes + len(oldest.Body)
+	m.evictOld()
+
+	if len(m.items) != 2 || m.items[0].ID != ids[0] || m.items[1].ID != ids[1] {
+		t.Fatalf("after eviction items = [%s %s], want [%s %s]",
+			m.items[0].ID, m.items[1].ID, ids[0], ids[1])
+	}
+	if m.sessionBytes != maxSessionBytes {
+		t.Errorf("counter after eviction = %d, want %d (exactly one body subtracted)",
+			m.sessionBytes, maxSessionBytes)
+	}
+	if _, ok := m.searchCache[ids[2]]; ok {
+		t.Error("searchCache kept the evicted delivery's haystack")
+	}
+	if m.list.unread[ids[2]] {
+		t.Error("list.unread kept the evicted delivery's mark")
+	}
+	if _, ok := m.detail.prettyCache[ids[2]]; ok {
+		t.Error("prettyCache kept the evicted delivery's entry")
+	}
+	if _, ok := m.replayByID[ids[2]]; ok {
+		t.Error("replayByID kept the evicted delivery's outcome")
+	}
+	// Surviving deliveries keep their entries.
+	if _, ok := m.searchCache[ids[1]]; !ok {
+		t.Error("searchCache lost the surviving delivery's haystack")
+	}
+	if _, ok := m.detail.prettyCache[ids[1]]; !ok {
+		t.Error("prettyCache lost the surviving delivery's entry")
+	}
+}
+
+func TestEvictOldKeepsLastItemOverCap(t *testing.T) {
+	m := newTestApp(t, []delivery.Delivery{testDelivery("POST", "/only", `{"a":1}`)})
+	m.sessionBytes = maxSessionBytes + 1 // fabricated: over cap with one item
+	m.evictOld()
+	if len(m.items) != 1 {
+		t.Errorf("evictOld left %d items, want 1 (loop guard)", len(m.items))
+	}
+}
+
+func TestConfirmClearResetsCounterAndCaches(t *testing.T) {
+	in := testDelivery("POST", "/p", `{"a":1}`)
+	m := newTestApp(t, []delivery.Delivery{in})
+	d := testDelivery("POST", "/q", strings.Repeat("x", 32))
+	model, _ := m.Update(deliveryMsg(d))
+	*m = *model.(*Model)
+	m.haystack(m.items[0])
+	m.replayByID[in.ID] = replayInfo{target: "http://127.0.0.1:9999"}
+	if m.sessionBytes == 0 {
+		t.Fatal("counter should be positive before the clear")
+	}
+
+	sendKey(t, m, "x")
+	sendKey(t, m, "y") // confirm
+	if len(m.items) != 0 {
+		t.Fatalf("items after clear = %d, want 0", len(m.items))
+	}
+	if m.sessionBytes != 0 {
+		t.Errorf("counter after clear = %d, want 0", m.sessionBytes)
+	}
+	if len(m.list.unread) != 0 {
+		t.Errorf("unread after clear = %d entries, want 0", len(m.list.unread))
+	}
+	if len(m.searchCache) != 0 || len(m.detail.prettyCache) != 0 || len(m.replayByID) != 0 {
+		t.Errorf("caches not emptied on clear: search=%d pretty=%d replay=%d",
+			len(m.searchCache), len(m.detail.prettyCache), len(m.replayByID))
+	}
+}
+
+// --- dropped-counter observability ---
+
+func TestDroppedCounterShowsInStatusLine(t *testing.T) {
+	m := newTestApp(t, []delivery.Delivery{testDelivery("POST", "/p", `{}`)})
+	if strings.Contains(m.View(), "dropped") {
+		t.Error("nil counter must not render a dropped notice")
+	}
+	var dropped atomic.Int64
+	m.cfg.Dropped = &dropped
+	if strings.Contains(m.View(), "dropped") {
+		t.Error("zero drops must not render a dropped notice")
+	}
+	dropped.Store(2)
+	view := m.View()
+	if !strings.Contains(view, "2 dropped") {
+		t.Error("status line should show the live drop count")
+	}
+	assertFrameFits(t, view, m.width, m.height)
+	dropped.Store(0)
+	if strings.Contains(m.View(), "dropped") {
+		t.Error("counter must be re-read every frame, not cached")
 	}
 }

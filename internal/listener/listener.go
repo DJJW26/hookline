@@ -83,8 +83,13 @@ func (l *Listener) URL() string {
 }
 
 // Stop gracefully shuts the server down, waiting at most until ctx is done.
+// When graceful shutdown gives up — an in-flight handler outlived the
+// deadline — it falls back to a hard close: lingering connections are cut
+// so a torn request can never complete (and be recorded) after Stop
+// returns.
 func (l *Listener) Stop(ctx context.Context) error {
 	if err := l.srv.Shutdown(ctx); err != nil {
+		_ = l.srv.Close() // in-flight handlers exceeded ctx: cut them
 		return fmt.Errorf("listener: shutdown: %w", err)
 	}
 	return nil

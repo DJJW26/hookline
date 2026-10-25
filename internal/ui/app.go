@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -30,6 +31,11 @@ type Config struct {
 	Target     string              // default replay target ("" = unset)
 	OnClear    func()              // persists a clear request (wired to the store)
 	TargetSave func(target string) // persists a new replay target (wired to config.json)
+	// Dropped, when non-nil, points at the live count of deliveries the
+	// capture callback dropped because the events channel was full. The
+	// status line shows the count whenever it is non-zero — drops are
+	// surfaced, never silent.
+	Dropped *atomic.Int64
 }
 
 // Model is the root Bubble Tea model.
@@ -42,6 +48,12 @@ type Model struct {
 	list   listModel
 	detail detailModel
 	help   helpModel
+
+	// sessionBytes is the running total of body bytes held in items,
+	// maintained incrementally by the delivery path and evictOld so the
+	// maxSessionBytes cap is enforced without re-summing every body on
+	// each capture.
+	sessionBytes int
 
 	focus focus
 	mode  mode
@@ -95,8 +107,10 @@ const searchBodyCap = 64 << 10
 func New(cfg Config, st style.Styles, theme style.Theme) *Model {
 	items := make([]*delivery.Delivery, 0, len(cfg.Initial)+16)
 	// Newest first: reverse the chronological initial load.
+	var seeded int
 	for i := len(cfg.Initial) - 1; i >= 0; i-- {
 		d := cfg.Initial[i]
+		seeded += len(d.Body)
 		items = append(items, &d)
 	}
 	m := &Model{
@@ -104,6 +118,7 @@ func New(cfg Config, st style.Styles, theme style.Theme) *Model {
 		st:           st,
 		theme:        theme,
 		items:        items,
+		sessionBytes: seeded,
 		list:         newListModel(),
 		detail:       newDetailModel(),
 		methodCycle:  []string{"", "GET", "POST", "PUT", "PATCH", "DELETE"},
@@ -119,7 +134,9 @@ func New(cfg Config, st style.Styles, theme style.Theme) *Model {
 	return m
 }
 
-// sessionBytes sums the bodies currently held in memory.
+// sessionBytes sums the bodies currently held in items. evictOld tracks
+// this total incrementally on Model.sessionBytes; the explicit sum remains
+// as the reference the tests cross-check the running counter against.
 func sessionBytes(items []*delivery.Delivery) int {
 	var n int
 	for _, d := range items {
@@ -129,10 +146,18 @@ func sessionBytes(items []*delivery.Delivery) int {
 }
 
 // evictOld drops the oldest deliveries until the session stays under
-// maxSessionBytes.
+// maxSessionBytes, keeping the running sessionBytes counter and every
+// per-delivery cache (search haystacks, unread marks, pretty JSON, replay
+// outcomes) in lockstep — an entry whose delivery is gone is dead weight.
 func (m *Model) evictOld() {
-	for sessionBytes(m.items) > maxSessionBytes && len(m.items) > 1 {
+	for m.sessionBytes > maxSessionBytes && len(m.items) > 1 {
+		old := m.items[len(m.items)-1]
+		m.sessionBytes -= len(old.Body)
 		m.items = m.items[:len(m.items)-1]
+		delete(m.searchCache, old.ID)
+		m.list.forget(old.ID)
+		delete(m.detail.prettyCache, old.ID)
+		delete(m.replayByID, old.ID)
 	}
 	m.visibleDirty = true
 }
@@ -175,6 +200,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case deliveryMsg:
 		d := delivery.Delivery(msg)
 		m.items = append([]*delivery.Delivery{&d}, m.items...)
+		m.sessionBytes += len(d.Body)
 		m.list.markUnread(d.ID)
 		m.evictOld()
 		return m, waitForDelivery(m.cfg.Events)
@@ -420,8 +446,11 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y", "enter":
 		m.mode = modeNormal
 		m.items = nil
+		m.sessionBytes = 0 // the bodies it tracks are gone
 		m.list = newListModel()
 		m.searchCache = map[string]string{}
+		m.detail.prettyCache = map[string]string{}
+		m.replayByID = map[string]replayInfo{}
 		m.visibleDirty = true
 		if m.cfg.OnClear != nil {
 			m.cfg.OnClear()

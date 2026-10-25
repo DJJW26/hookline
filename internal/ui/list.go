@@ -36,6 +36,10 @@ type listState struct {
 // markUnread flags a delivery as new.
 func (l *listModel) markUnread(id string) { l.unread[id] = true }
 
+// forget drops a delivery's unread mark, called when the delivery itself is
+// evicted so the map never outlives its row.
+func (l *listModel) forget(id string) { delete(l.unread, id) }
+
 // selectedIndex resolves the selectedID against the visible items, falling
 // back to the newest row and clearing its unread flag.
 func (l *listModel) selectedIndex(items []*delivery.Delivery) int {

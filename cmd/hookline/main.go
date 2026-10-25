@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -100,13 +101,16 @@ func run() error {
 	}
 
 	events := make(chan delivery.Delivery, 1024)
+	var dropped atomic.Int64
 	capture := func(d delivery.Delivery) {
 		// Persist first so a crash never loses a delivery; then hand it to
-		// the UI, dropping rather than blocking if the UI has exited.
+		// the UI, dropping rather than blocking if the UI has exited. Drops
+		// are counted and surfaced by the UI's status line — never silent.
 		_ = st.Append(d)
 		select {
 		case events <- d:
 		default:
+			dropped.Add(1)
 		}
 	}
 
@@ -126,6 +130,7 @@ func run() error {
 		Events:    events,
 		Initial:   history,
 		Target:    targetURL,
+		Dropped:   &dropped,
 		OnClear:   func() { _ = st.Clear() },
 		TargetSave: func(t string) {
 			cfgFile.Target = t

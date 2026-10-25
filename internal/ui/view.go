@@ -224,6 +224,13 @@ func (m *Model) statusLine() string {
 	}
 	rightParts = append(rightParts, fmt.Sprintf("%d deliveries", len(m.items)))
 	right := m.st.StatusDim.Render(strings.Join(rightParts, " "+style.GlyphBullet+" "))
+	// Captures dropped under backpressure are never silent: the live count
+	// rides the status line in the warning color, re-read every frame.
+	if m.cfg.Dropped != nil {
+		if n := m.cfg.Dropped.Load(); n > 0 {
+			right += " " + style.GlyphBullet + " " + m.st.ToastWarn.Render(fmt.Sprintf("%d dropped", n))
+		}
+	}
 	if lipgloss.Width(right) >= m.width {
 		// Ultra-narrow terminals: shrink the right side before clamping.
 		right = m.st.TruncateEnd(right, max(8, m.width-lipgloss.Width(left)-1))
