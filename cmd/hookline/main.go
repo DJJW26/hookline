@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,14 +66,28 @@ func run() error {
 	}
 	defer st.Close()
 	if *fresh {
-		if err := st.Clear(); err != nil {
-			return fmt.Errorf("clearing store: %w", err)
+		// Rotate, never destroy: the previous history is kept aside as
+		// hookline-<timestamp>.jsonl (5 most recent backups retained).
+		if _, err := st.Rotate(5); err != nil {
+			return fmt.Errorf("rotating history: %w", err)
 		}
 	}
 	history, err := st.LoadLast(200)
 	if err != nil {
 		// History is a convenience, never fatal: start empty instead.
 		history = nil
+	}
+
+	// Replay target: --target wins, otherwise the last one used (persisted
+	// in the data dir) so a new terminal never starts targetless.
+	cfgFile := loadConfig(dataDir)
+	targetURL := strings.TrimSuffix(*target, "/")
+	if targetURL == "" {
+		targetURL = cfgFile.Target
+	}
+	if targetURL != cfgFile.Target {
+		cfgFile.Target = targetURL
+		_ = saveConfig(dataDir, cfgFile) // best effort; a read-only dir is not fatal
 	}
 
 	events := make(chan delivery.Delivery, 1024)
@@ -101,8 +116,12 @@ func run() error {
 		ListenURL: ln.URL(),
 		Events:    events,
 		Initial:   history,
-		Target:    strings.TrimSuffix(*target, "/"),
+		Target:    targetURL,
 		OnClear:   func() { _ = st.Clear() },
+		TargetSave: func(t string) {
+			cfgFile.Target = t
+			_ = saveConfig(dataDir, cfgFile)
+		},
 	}, style.New(theme), theme)
 
 	// Bubble Tea installs its own SIGINT/SIGTERM handlers that restore the
@@ -120,6 +139,32 @@ func run() error {
 	}
 	close(events)
 	return nil
+}
+
+// appConfig is the small persisted settings file in the data dir. Fields
+// are optional; a missing or corrupt file means defaults.
+type appConfig struct {
+	Target string `json:"target,omitempty"`
+}
+
+func loadConfig(dataDir string) appConfig {
+	raw, err := os.ReadFile(filepath.Join(dataDir, "config.json"))
+	if err != nil {
+		return appConfig{}
+	}
+	var c appConfig
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return appConfig{}
+	}
+	return c
+}
+
+func saveConfig(dataDir string, c appConfig) error {
+	raw, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dataDir, "config.json"), raw, 0o644)
 }
 
 // resolveDataDir honours HOOKLINE_DATA_DIR, then falls back to the

@@ -24,9 +24,19 @@ func humanSize(n int) string {
 	}
 }
 
-// dayTime renders a delivery timestamp as HH:MM:SS in local time.
+// dayTime renders a delivery timestamp relative to now: clock time for
+// today, weekday for this week, date for older — yesterday's history must
+// not masquerade as today's.
 func dayTime(t time.Time) string {
-	return t.Local().Format("15:04:05")
+	now := time.Now()
+	local := t.Local()
+	if local.Year() == now.Year() && local.YearDay() == now.YearDay() {
+		return local.Format("15:04:05")
+	}
+	if now.Sub(local) < 7*24*time.Hour {
+		return local.Format("Mon 15:04")
+	}
+	return local.Format("Jan 02 15:04")
 }
 
 // methodLabel pads a verb to the width of the longest common method so the

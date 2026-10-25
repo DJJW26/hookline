@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -67,8 +68,10 @@ func selectedDelivery(items []*delivery.Delivery, l *listModel) *delivery.Delive
 	return items[idx]
 }
 
-// View renders the detail panel for delivery d (nil renders a hint).
-func (d *detailModel) View(st style.Styles, sel *delivery.Delivery, w, h int, focused bool) string {
+// View renders the detail panel for delivery d (nil renders a hint). When
+// a replay outcome exists for d, the response tab shows it — the target's
+// actual answer, not just a status number.
+func (d *detailModel) View(st style.Styles, sel *delivery.Delivery, replayed *replayInfo, w, h int, focused bool) string {
 	if w < 8 || h < 4 {
 		return st.Panel.Render("")
 	}
@@ -86,7 +89,7 @@ func (d *detailModel) View(st style.Styles, sel *delivery.Delivery, w, h int, fo
 		title = " " + detailTabs[d.tab]
 		note := detailNote(st, sel)
 		title += strings.Repeat(" ", max(0, inner-lipgloss.Width(title)-lipgloss.Width(note))) + note
-		body = d.renderBody(st, sel, inner)
+		body = d.renderBody(st, sel, replayed, inner)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, title, body)
 
@@ -120,9 +123,11 @@ func detailNote(st style.Styles, sel *delivery.Delivery) string {
 	return st.PanelNote.Render(method + " " + path + " " + humanSize(sel.Size()))
 }
 
-// renderBody renders the active tab's content, memoised per (id, tab, width).
-func (d *detailModel) renderBody(st style.Styles, sel *delivery.Delivery, width int) string {
-	key := fmt.Sprintf("%s|%d|%d", sel.ID, d.tab, width)
+// renderBody renders the active tab's content, memoised per
+// (id, tab, width, replayed). The replay outcome participates in the cache
+// key because the response tab changes when one lands.
+func (d *detailModel) renderBody(st style.Styles, sel *delivery.Delivery, replayed *replayInfo, width int) string {
+	key := fmt.Sprintf("%s|%d|%d|%v", sel.ID, d.tab, width, replayed != nil)
 	if key == d.cacheKey && d.cache != "" {
 		return d.cache
 	}
@@ -135,7 +140,7 @@ func (d *detailModel) renderBody(st style.Styles, sel *delivery.Delivery, width 
 	case 2:
 		content = st.Plain(sel.Body, width)
 	default:
-		content = renderResponseTab(st, sel, width)
+		content = renderResponseTab(st, sel, replayed, width)
 	}
 	d.cacheKey = key
 	d.cache = content
@@ -213,8 +218,28 @@ func renderHeadersTab(st style.Styles, sel *delivery.Delivery, width int) string
 	return b.String()
 }
 
-func renderResponseTab(st style.Styles, sel *delivery.Delivery, width int) string {
-	code := st.StatusStyle(sel.ResponseStatus).Render(fmt.Sprintf("%d", sel.ResponseStatus))
-	return "hookline replied " + code + st.PanelNote.Render("  (auto-response; configure with --status)") + "\n" +
-		st.Empty.Render("(response body is not recorded)")
+// renderResponseTab shows the last replay outcome when one exists (status,
+// latency, target, and the head of the target's response body — the stack
+// trace or error JSON a developer actually needs), otherwise the
+// listener's auto-response.
+func renderResponseTab(st style.Styles, sel *delivery.Delivery, replayed *replayInfo, width int) string {
+	auto := "hookline replied " +
+		st.StatusStyle(sel.ResponseStatus).Render(fmt.Sprintf("%d", sel.ResponseStatus)) +
+		st.PanelNote.Render("  (auto-response; configure with --status)")
+	if replayed == nil {
+		return auto + "\n" + st.Empty.Render("press r to replay — the target's answer lands here")
+	}
+
+	head := replayed.res.Body
+	if len(head) > maxRenderBytes {
+		head = head[:maxRenderBytes]
+	}
+	// st.JSON highlights JSON bodies and falls back to escaped plain text
+	// for anything else — exactly the behavior a response body needs.
+	bodyText := st.JSON(head, width)
+	code := st.StatusStyle(replayed.res.StatusCode).Render(fmt.Sprintf("%d", replayed.res.StatusCode))
+	summary := "replay → " + code +
+		st.PanelNote.Render(fmt.Sprintf("  %s in %s", strings.TrimPrefix(replayed.target, "http://"), replayed.res.Duration.Round(time.Millisecond)))
+	return summary + "\n" + bodyText + "\n" +
+		st.PanelNote.Render("(auto-response was "+fmt.Sprintf("%d", sel.ResponseStatus)+")")
 }

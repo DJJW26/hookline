@@ -29,14 +29,18 @@ binary, and it blends into whatever terminal you already customized.
 - **Capture everything** — any method, path, header, content type; JSON,
   urlencoded forms, or binary (hex view). Bursts are queued, nothing drops.
 - **Inspect fast** — syntax-highlighted JSON, aligned headers, raw bytes,
-  auto-response; unread markers for new arrivals; live search (`/`) and
-  method filter (`f`).
+  auto-response; unread markers for new arrivals; live search (`/`, matches
+  headers too) and method filter (`f`).
 - **Replay & edit** — resend a delivery byte-identical to any target (`r`),
   round-trip the body through `$EDITOR` with a diff review, then send (`e`).
+  The target's answer lands in the response tab; toasts are colored by
+  status class. Non-loopback targets ask for a confirming second `r`, and
+  the target persists to `config.json` between runs.
 - **Export** — copy any delivery as a shell-safe cURL command (`c`) or the
   raw body (`y`). Copies use OSC 52, so they work inside SSH sessions.
 - **Persistent** — history survives restarts as JSONL on disk
-  (`--fresh` to start clean).
+  (`--fresh` rotates it aside to `hookline-<timestamp>.jsonl`, keeping 5,
+  instead of deleting).
 - **Blend in** — transparent backgrounds, auto dark/light detection,
   truecolor with graceful degradation to 256/16/mono, `NO_COLOR` respected,
   window title set on start. Your terminal's theme shows through, not ours.
@@ -67,12 +71,13 @@ tunnel is on the roadmap.
 | Key | Action | Key | Action |
 |---|---|---|---|
 | `j k` / `↑ ↓` | select / scroll | `r` `R` | replay selected / latest |
-| `tab` | switch pane | `e` | edit body & resend |
-| `enter` | inspect delivery | `c` / `y` | copy as cURL / copy body |
-| `1-4` `h l` | detail tabs | `t` | set replay target |
-| `/` | search | `f` | filter by method |
-| `g` `G` | top / bottom | `x` | clear history (confirm) |
-| `?` | help | `q` | quit |
+| `PgUp/PgDn` | page (or ctrl+u/d) | `e` | edit body & resend |
+| `n` | next unread | `c` / `y` | copy as cURL / copy body |
+| `tab` | switch pane | `t` | set replay target |
+| `enter` | inspect delivery | `f` | filter by method |
+| `1-4` `h l` | detail tabs | `x` | clear history (confirm) |
+| `/` | search (incl. headers) | `?` | help |
+| `g` `G` | top / bottom | `q` | quit |
 
 Mouse works too: click to select, wheel to scroll.
 
@@ -88,13 +93,14 @@ registry entries, so adding one is a single struct.
 
     --port 4040        listen port            --status 200   reply status
     --bind 127.0.0.1   listen address         --target URL   default replay target
-    --theme auto       dark|light|mono|auto   --fresh        empty history
+    --theme auto       dark|light|mono|auto   --fresh        rotate history aside
     --version
 
 History is JSONL in `%LOCALAPPDATA%\hookline` (Windows) or
 `$XDG_DATA_HOME/hookline` (elsewhere); override with `HOOKLINE_DATA_DIR`.
-Copies fall back to `HOOKLINE_CLIP_CMD` (e.g. `clip.exe`, `wl-copy`) on
-terminals without OSC 52.
+The replay target lives in `config.json` next to it. Copies fall back to
+`HOOKLINE_CLIP_CMD` (e.g. `clip.exe`, `wl-copy`) on terminals without
+OSC 52.
 
 ## Status
 

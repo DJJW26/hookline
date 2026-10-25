@@ -8,6 +8,8 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,12 +23,13 @@ import (
 // Config wires the app to its environment. Everything here is injectable,
 // which is what keeps the UI testable without a terminal or a network.
 type Config struct {
-	Version   string
-	ListenURL string // "" when not listening (offline viewing mode)
-	Events    <-chan delivery.Delivery
-	Initial   []delivery.Delivery
-	Target    string // default replay target ("" = unset)
-	OnClear   func() // persists a clear request (wired to the store)
+	Version    string
+	ListenURL  string // "" when not listening (offline viewing mode)
+	Events     <-chan delivery.Delivery
+	Initial    []delivery.Delivery
+	Target     string              // default replay target ("" = unset)
+	OnClear    func()              // persists a clear request (wired to the store)
+	TargetSave func(target string) // persists a new replay target (wired to config.json)
 }
 
 // Model is the root Bubble Tea model.
@@ -54,6 +57,14 @@ type Model struct {
 	visibleDirty bool
 	searchCache  map[string]string // delivery ID → lowercased haystack
 
+	// replayByID remembers the most recent replay outcome per delivery
+	// (row badges + the response tab); bounded by replayMaxEntries.
+	replayByID map[string]replayInfo
+
+	// confirmRemote gates the first replay to a non-loopback target so a
+	// production-ish URL is never sent to silently.
+	confirmRemote bool
+
 	target     string
 	pending    *pendingEdit
 	toast      *toast
@@ -61,6 +72,15 @@ type Model struct {
 
 	width, height int
 }
+
+// replayInfo is one replay outcome, kept for badges and the response tab.
+type replayInfo struct {
+	target string
+	res    replay.Result
+}
+
+// replayMaxEntries bounds replay memory; older outcomes are dropped.
+const replayMaxEntries = 64
 
 // maxSessionBytes bounds the bodies held in memory during a session so a
 // burst of multi-megabyte captures cannot grow the heap without limit.
@@ -89,6 +109,7 @@ func New(cfg Config, st style.Styles, theme style.Theme) *Model {
 		methodCycle:  []string{"", "GET", "POST", "PUT", "PATCH", "DELETE"},
 		target:       cfg.Target,
 		searchCache:  map[string]string{},
+		replayByID:   map[string]replayInfo{},
 		visibleDirty: true,
 	}
 	if len(items) > 0 {
@@ -238,6 +259,15 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.detail.scroll--
 			}
 			return m, nil
+		case "pgdown", "ctrl+d":
+			m.detail.scroll += max(1, m.bodyHeight()-4)
+			return m, nil
+		case "pgup", "ctrl+u":
+			m.detail.scroll -= max(1, m.bodyHeight()-4)
+			if m.detail.scroll < 0 {
+				m.detail.scroll = 0
+			}
+			return m, nil
 		case "esc":
 			m.focus = focusList
 			return m, nil
@@ -266,10 +296,16 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.list.move(m.visible(), 1, m.listContentH())
 	case "k", "up":
 		m.list.move(m.visible(), -1, m.listContentH())
+	case "pgdown", "ctrl+d":
+		m.list.move(m.visible(), max(1, m.listContentH()), m.listContentH())
+	case "pgup", "ctrl+u":
+		m.list.move(m.visible(), -max(1, m.listContentH()), m.listContentH())
 	case "g":
 		m.list.jumpTo(m.visible(), false, m.listContentH())
 	case "G":
 		m.list.jumpTo(m.visible(), true, m.listContentH())
+	case "n":
+		m.jumpUnread()
 	case "enter":
 		if len(m.visible()) > 0 {
 			m.focus = focusDetail
@@ -326,6 +362,7 @@ func (m *Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.search = ""
 			m.visibleDirty = true
 		}
+		m.input = newInput(m.input.label, "") // never leak prompt text
 		m.mode = modeNormal
 		return m, nil
 	}
@@ -338,12 +375,28 @@ func (m *Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	// Enter submitted the prompt.
 	if m.mode == modeTarget {
-		m.target = strings.TrimSpace(m.input.Value())
+		m.target = normalizeTarget(strings.TrimSpace(m.input.Value()))
+		m.confirmRemote = false // new target restarts the remote guard
+		if m.cfg.TargetSave != nil && m.target != "" {
+			m.cfg.TargetSave(m.target)
+		}
 		m.mode = modeNormal
+		if m.target == "" {
+			return m, m.showToast(toastNeutral, "", "replay target cleared")
+		}
 		return m, m.showToast(toastNeutral, "", "replay target "+m.target)
 	}
 	m.mode = modeNormal
 	return m, nil
+}
+
+// normalizeTarget adds the http:// scheme when the user omitted it, so
+// "localhost:3000" works instead of failing at replay time.
+func normalizeTarget(t string) string {
+	if t != "" && !strings.Contains(t, "://") {
+		return "http://" + t
+	}
+	return t
 }
 
 func (m *Model) updateDiff(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -438,8 +491,22 @@ func (m *Model) applyReplayResult(msg replayResultMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		return m, m.showToast(toastBad, subject, msg.err.Error())
 	}
-	text := fmt.Sprintf("%d in %s", msg.res.StatusCode, msg.res.Duration.Round(time.Millisecond))
-	return m, m.showToast(toastGood, subject, text)
+	// Remember the outcome: it becomes the row badge and the response tab.
+	if len(m.replayByID) >= replayMaxEntries {
+		m.replayByID = map[string]replayInfo{}
+	}
+	m.replayByID[msg.d.ID] = replayInfo{target: m.target, res: msg.res}
+	m.detail.cacheKey = "" // response tab content changed
+
+	kind := toastGood
+	switch {
+	case msg.res.StatusCode >= 400:
+		kind = toastBad
+	case msg.res.StatusCode >= 300:
+		kind = toastWarn
+	}
+	text := fmt.Sprintf("%d in %s — response tab for body", msg.res.StatusCode, msg.res.Duration.Round(time.Millisecond))
+	return m, m.showToast(kind, subject, text)
 }
 
 func (m *Model) applyEditorDone(msg editorDoneMsg) (tea.Model, tea.Cmd) {
@@ -458,10 +525,16 @@ func (m *Model) applyEditorDone(msg editorDoneMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// replaySelected sends a delivery to the configured target.
+// replaySelected sends a delivery to the configured target. A non-loopback
+// target demands one confirming keypress first — the guard against
+// reflexively firing a production payload somewhere unexpected.
 func (m *Model) replaySelected(d delivery.Delivery) tea.Cmd {
 	if m.target == "" {
 		return m.showToast(toastWarn, "", "no replay target — press t to set one")
+	}
+	if !isLocalTarget(m.target) && !m.confirmRemote {
+		m.confirmRemote = true
+		return m.showToast(toastWarn, "", m.target+" is not local — press r again to send")
 	}
 	target := m.target
 	return func() tea.Msg {
@@ -470,6 +543,20 @@ func (m *Model) replaySelected(d delivery.Delivery) tea.Cmd {
 		res, err := replay.Do(ctx, target, d)
 		return replayResultMsg{d: d, res: res, err: err}
 	}
+}
+
+// isLocalTarget reports whether the target points at this machine.
+func isLocalTarget(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (m *Model) copyCurl(d delivery.Delivery) tea.Cmd {
@@ -519,18 +606,46 @@ func (m *Model) visible() []*delivery.Delivery {
 	return m.visibleItems
 }
 
-// haystack builds (once per delivery) the lowercase text searched by "/".
+// haystack builds (once per delivery) the lowercase text searched by "/":
+// method, URL, headers and the first searchBodyCap bytes of body — finding
+// "the delivery with the weird X-Shopify-Hmac header" is a real workflow.
 func (m *Model) haystack(d *delivery.Delivery) string {
 	if h, ok := m.searchCache[d.ID]; ok {
 		return h
+	}
+	var hb strings.Builder
+	for k, vs := range d.Headers {
+		hb.WriteString(k)
+		hb.WriteString(": ")
+		hb.WriteString(strings.Join(vs, ","))
+		hb.WriteString(" ")
 	}
 	body := d.Body
 	if len(body) > searchBodyCap {
 		body = body[:searchBodyCap]
 	}
-	h := strings.ToLower(d.Method + " " + d.URL() + " " + string(body))
+	h := strings.ToLower(d.Method + " " + d.URL() + " " + hb.String() + " " + string(body))
 	m.searchCache[d.ID] = h
 	return h
+}
+
+// jumpUnread selects the next delivery marked unread, wrapping past the
+// end — the "what did I miss" key after a burst.
+func (m *Model) jumpUnread() {
+	vis := m.visible()
+	if len(vis) == 0 {
+		return
+	}
+	cur := m.list.selectedIndex(vis)
+	for step := 1; step <= len(vis); step++ {
+		idx := (cur + step) % len(vis)
+		if m.list.unread[vis[idx].ID] {
+			m.list.selectedID = vis[idx].ID
+			delete(m.list.unread, vis[idx].ID)
+			m.list.scrollTo(idx, len(vis), m.listContentH())
+			return
+		}
+	}
 }
 
 // filterLabel describes the active filter for the list note.

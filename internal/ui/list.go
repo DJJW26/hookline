@@ -30,6 +30,7 @@ type listState struct {
 	total     int    // unfiltered count
 	filter    string // "" or a live filter description
 	listenURL string
+	replays   map[string]int // delivery ID → last replay status, for row badges
 }
 
 // markUnread flags a delivery as new.
@@ -164,16 +165,21 @@ func (l *listModel) View(st style.Styles, s listState, w, h int, focused bool) s
 		}
 		end := min(l.offset+contentH, len(s.items))
 		for i := l.offset; i < end; i++ {
-			rows = append(rows, renderRow(st, s.items[i], i == sel, focused, l.unread[s.items[i].ID], inner))
+			rows = append(rows, renderRow(st, s.items[i], i == sel, focused, l.unread[s.items[i].ID], s.replays[s.items[i].ID], inner))
 		}
 	}
 	body := strings.Join(rows, "\n")
 	content := lipgloss.JoinVertical(lipgloss.Left, titleLine, body)
 
-	// Grow content to the full height so the border always encloses h lines.
+	// Content is exactly h-2 rows: pad when short, trim when long (the
+	// empty state or a dense burst must never grow the panel past its
+	// allotted block — scrolling handles overflow).
 	lines := strings.Split(content, "\n")
 	for len(lines) < h-2 {
 		lines = append(lines, blankLine(inner))
+	}
+	if len(lines) > h-2 {
+		lines = lines[:h-2]
 	}
 	return panel.Render(strings.Join(lines, "\n"))
 }
@@ -186,8 +192,8 @@ func listNote(s listState) string {
 	return strings.Join(parts, " · ")
 }
 
-func renderRow(st style.Styles, d *delivery.Delivery, selected, focused, isNew bool, width int) string {
-	row := renderRowContent(st, d, isNew, width)
+func renderRow(st style.Styles, d *delivery.Delivery, selected, focused, isNew bool, replayStatus int, width int) string {
+	row := renderRowContent(st, d, isNew, replayStatus, width)
 	if selected {
 		if focused {
 			row = st.RowSelectedLive.Render(row)
@@ -195,10 +201,12 @@ func renderRow(st style.Styles, d *delivery.Delivery, selected, focused, isNew b
 			row = st.RowSelected.Render(row)
 		}
 	}
-	return row
+	// Ultra-narrow panes: the fixed columns alone may exceed the width;
+	// cut the row rather than the frame.
+	return st.TruncateEnd(row, width)
 }
 
-func renderRowContent(st style.Styles, d *delivery.Delivery, isNew bool, width int) string {
+func renderRowContent(st style.Styles, d *delivery.Delivery, isNew bool, replayStatus int, width int) string {
 	markCol := " "
 	if isNew {
 		markCol = st.Unread.Render(style.GlyphUnread)
@@ -207,11 +215,20 @@ func renderRowContent(st style.Styles, d *delivery.Delivery, isNew bool, width i
 	method := st.Method(d.Method).Render(methodLabel(d.Method))
 
 	meta := strings.TrimSpace(humanSize(d.Size()) + " " + kindLabel(*d))
+	if replayStatus != 0 {
+		// The last replay outcome rides along in the meta column, colored
+		// by status class — the "which of these pass?" affordance.
+		meta = fmt.Sprintf("%d %s", replayStatus, meta)
+	}
 	metaCol := st.RowDim.Render(meta)
+	if replayStatus != 0 {
+		metaCol = st.StatusStyle(replayStatus).Render(meta)
+	}
 
-	// Reserve: 3 leading, 8 time, 6 method, three 1-col separators, meta,
-	// 1 trailing — path gets whatever remains (min 4).
-	pathBudget := width - 21 - lipgloss.Width(metaCol)
+	// Reserve: 3 leading, time, 6 method, three 1-col separators, meta,
+	// 1 trailing — path gets whatever remains (min 4). Time width varies
+	// (today vs older dates), so measure it rather than assume 8.
+	pathBudget := width - (3 + lipgloss.Width(timeCol) + 1 + lipgloss.Width(method) + 1 + 1 + lipgloss.Width(metaCol) + 1)
 	if pathBudget < 4 {
 		pathBudget = 4
 	}
@@ -226,18 +243,20 @@ func renderRowContent(st style.Styles, d *delivery.Delivery, isNew bool, width i
 
 // emptyList renders the no-deliveries state: a short explanation plus a
 // copy-pasteable curl that exercises the listener, so the first useful
-// interaction is ten seconds away.
+// interaction is ten seconds away. Every line is truncated to the pane
+// width — a wide hint must grow the rows, never the panel.
 func emptyList(st style.Styles, s listState, width int) []string {
-	hint := " waiting for webhooks"
+	hint := st.TruncateEnd(" waiting for webhooks", width)
 	if s.filter != "" {
-		return []string{hint, "", st.Empty.Render("no deliveries match " + s.filter)}
+		return []string{hint, "",
+			st.Empty.Render(st.TruncateEnd("no deliveries match "+s.filter, width))}
 	}
 	example := fmt.Sprintf(" curl -X POST %s/test -d '{\"hello\":\"world\"}'", s.listenURL)
 	return []string{
 		hint,
 		"",
-		st.Empty.Render("send a request to the listener and it lands here:"),
+		st.Empty.Render(st.TruncateEnd("send a request to the listener and it lands here:", width)),
 		st.EmptyCode.Render(st.TruncateEnd(example, width)),
-		st.Empty.Render("press c on a delivery to copy it as cURL"),
+		st.Empty.Render(st.TruncateEnd("press c on a delivery to copy it as cURL", width)),
 	}
 }

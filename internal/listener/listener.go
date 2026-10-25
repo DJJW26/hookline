@@ -93,8 +93,14 @@ func (l *Listener) Stop(ctx context.Context) error {
 // handler builds the capture handler used for every method and path.
 func (l *Listener) handler(status int, maxBody int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+		body, readErr := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 		_ = r.Body.Close()
+		if readErr != nil {
+			// The client aborted mid-body (torn connection): a partial
+			// capture is noise, not signal. Refuse rather than record.
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		truncated := int64(len(body)) > maxBody
 		if truncated {
 			body = body[:maxBody]

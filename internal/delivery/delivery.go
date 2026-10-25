@@ -41,8 +41,10 @@ type Delivery struct {
 	Truncated      bool   `json:"truncated,omitempty"`
 }
 
-// NewID returns a random, sortable identifier for a delivery. It is prefixed
-// with the unix millisecond timestamp so stored files stay ordered.
+// NewID returns a unique identifier for a delivery, prefixed with the unix
+// millisecond timestamp. Ordering is guaranteed only across milliseconds:
+// IDs born in the same millisecond sort by their random suffix. (Nothing
+// in the pipeline relies on ID ordering — file order is authoritative.)
 func NewID() string {
 	var b [6]byte
 	ts := time.Now().UnixMilli()
@@ -75,19 +77,26 @@ func (d Delivery) ContentType() string {
 	return ""
 }
 
-// Kind reports how the body should be rendered.
+// Kind reports how the body should be rendered. What the body IS outranks
+// what its Content-Type claims: binary bytes (control characters, invalid
+// UTF-8 — e.g. a gzip payload mislabeled application/json) are always
+// KindBinary, protecting cURL export from corrupting them via string
+// conversion. Beyond that, a declared form type beats JSON sniffing.
 func (d Delivery) Kind() Kind {
 	if len(d.Body) == 0 {
 		return KindEmpty
 	}
-	ct := strings.ToLower(d.ContentType())
-	if strings.Contains(ct, "json") || sniffJSON(d.Body) {
-		return KindJSON
+	if sniffBinaryText(d.Body) == KindBinary {
+		return KindBinary
 	}
+	ct := strings.ToLower(d.ContentType())
 	if strings.Contains(ct, "x-www-form-urlencoded") {
 		return KindForm
 	}
-	return sniffBinaryText(d.Body)
+	if strings.Contains(ct, "json") || sniffJSON(d.Body) {
+		return KindJSON
+	}
+	return KindText
 }
 
 func sniffJSON(body []byte) bool {

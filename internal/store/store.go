@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
+	"time"
 
 	"hookline/internal/delivery"
 )
@@ -120,7 +122,8 @@ func (s *Store) LoadLast(n int) ([]delivery.Delivery, error) {
 }
 
 // Clear removes every stored delivery by truncating the file. The store
-// remains open for further appends.
+// remains open for further appends. For a recoverable fresh start prefer
+// Rotate, which keeps the old history aside.
 func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,6 +149,60 @@ func (s *Store) Clear() error {
 		}
 	}
 	return nil
+}
+
+// Rotate renames the current history file aside as
+// hookline-YYYYMMDD-HHMMSS.jsonl and starts a fresh one, keeping at most
+// maxKeep rotated files (oldest pruned first). It returns the backup path,
+// or "" when there was nothing to rotate. Unlike Clear, no history is ever
+// destroyed — this is what --fresh uses.
+func (s *Store) Rotate(maxKeep int) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f == nil {
+		return "", fmt.Errorf("store: %s is closed", s.path)
+	}
+	_ = s.w.Flush()
+	closeErr := s.f.Close()
+	s.f = nil
+	if closeErr != nil {
+		return "", fmt.Errorf("store: rotate %s: %w", s.path, closeErr)
+	}
+
+	var backup string
+	if _, statErr := os.Stat(s.path); statErr == nil {
+		dir := filepath.Dir(s.path)
+		backup = filepath.Join(dir, backupName(time.Now()))
+		if err := os.Rename(s.path, backup); err != nil {
+			return "", fmt.Errorf("store: rotate %s: %w", s.path, err)
+		}
+		pruneBackups(dir, maxKeep)
+	}
+
+	f, openErr := os.OpenFile(s.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	if openErr != nil {
+		return "", fmt.Errorf("store: rotate %s: %w", s.path, openErr)
+	}
+	s.f = f
+	s.w = bufio.NewWriter(f)
+	return backup, nil
+}
+
+// backupName builds the rotated-file name for a point in time.
+func backupName(t time.Time) string {
+	return "hookline-" + t.Format("20060102-150405") + ".jsonl"
+}
+
+// pruneBackups removes the oldest rotated files beyond keep.
+func pruneBackups(dir string, keep int) {
+	matches, err := filepath.Glob(filepath.Join(dir, "hookline-*.jsonl"))
+	if err != nil || len(matches) <= keep {
+		return
+	}
+	sort.Strings(matches) // timestamped names sort chronologically
+	for _, old := range matches[:len(matches)-keep] {
+		_ = os.Remove(old)
+	}
 }
 
 // Close flushes and closes the underlying file. It is safe to call twice.

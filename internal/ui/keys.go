@@ -18,6 +18,8 @@ var helpSections = []struct {
 		title: "navigate",
 		hints: []keyHint{
 			{"↑/↓ j/k", "move selection / scroll"},
+			{"PgUp/PgDn", "page (or ctrl+u/d)"},
+			{"n", "next unread delivery"},
 			{"tab", "switch pane"},
 			{"enter", "inspect delivery"},
 			{"esc", "back / cancel"},
@@ -33,7 +35,7 @@ var helpSections = []struct {
 			{"c", "copy as cURL"},
 			{"y", "copy raw body"},
 			{"t", "set replay target"},
-			{"/", "find deliveries"},
+			{"/", "find (incl. headers)"},
 			{"f", "filter by method"},
 			{"x", "clear all deliveries"},
 		},

@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"hookline/internal/delivery"
 	"hookline/internal/style"
 )
 
@@ -23,11 +24,12 @@ const splitWidth = 96
 func (m *Model) splitPanes() bool { return m.width >= splitWidth }
 
 // bodyHeight is the height available to panes: total minus header, input
-// row and status line.
+// row and status line. Below 3 lines no pane fits (a bordered empty panel
+// is already 3 tall); bodyView falls back to blanks.
 func (m *Model) bodyHeight() int {
 	h := m.height - 3
-	if h < 4 {
-		h = 4
+	if h < 1 {
+		h = 1
 	}
 	return h
 }
@@ -77,8 +79,11 @@ func (m *Model) View() string {
 	var b strings.Builder
 	b.WriteString(m.headerLine())
 	b.WriteString("\n")
-	if m.mode == modeHelp {
+	if m.mode == modeHelp && m.bodyHeight() >= 5 {
 		b.WriteString(m.help.View(m.st, m.width, m.bodyHeight()))
+	} else if m.mode == modeHelp {
+		// Too short for even a trimmed overlay.
+		b.WriteString(strings.Join([]string{blankLine(m.width), blankLine(m.width), blankLine(m.width), blankLine(m.width), blankLine(m.width)}[:m.bodyHeight()], "\n"))
 	} else {
 		b.WriteString(m.bodyView())
 	}
@@ -92,7 +97,8 @@ func (m *Model) View() string {
 	return b.String()
 }
 
-// headerLine: "◆ hookline" left, listener state right.
+// headerLine: "◆ hookline" left, listener state right. Hard-truncated to
+// the terminal width so tiny windows never overflow the frame.
 func (m *Model) headerLine() string {
 	left := m.st.Brand.Render(style.GlyphBrand + " hookline")
 	var right string
@@ -106,11 +112,21 @@ func (m *Model) headerLine() string {
 	if gap < 1 {
 		gap = 1
 	}
-	return left + strings.Repeat(" ", gap) + right
+	line := left + strings.Repeat(" ", gap) + right
+	if m.width > 0 {
+		line = m.st.TruncateEnd(line, m.width)
+	}
+	return line
 }
 
-// bodyView lays out the panes (or the diff review panel).
+// bodyView lays out the panes (or the diff review panel). The help overlay
+// is rendered by View directly and never reaches here.
 func (m *Model) bodyView() string {
+	if m.bodyHeight() < 3 {
+		// No pane fits: fill the block with blanks so the frame stays
+		// exactly the terminal height.
+		return strings.Join([]string{blankLine(m.width), blankLine(m.width), blankLine(m.width)}[:m.bodyHeight()], "\n")
+	}
 	if m.mode == modeDiff && m.pending != nil {
 		return m.diffView()
 	}
@@ -119,22 +135,49 @@ func (m *Model) bodyView() string {
 		total:     len(m.items),
 		filter:    m.filterLabel(),
 		listenURL: m.cfg.ListenURL,
+		replays:   m.replayStatuses(),
 	}
 	sel := m.selection()
+	replayed := m.replayFor(sel)
 
 	if m.splitPanes() {
 		listW := m.listWidth()
 		detailW := m.width - listW - 1
 		listPane := m.list.View(m.st, ls, listW, m.bodyHeight(), m.focus == focusList)
-		detailPane := m.detail.View(m.st, sel, detailW, m.bodyHeight(), m.focus == focusDetail)
+		detailPane := m.detail.View(m.st, sel, replayed, detailW, m.bodyHeight(), m.focus == focusDetail)
 		return lipgloss.JoinHorizontal(lipgloss.Top, listPane, " ", detailPane)
 	}
 
 	listH := m.stackedListH()
 	detailH := m.bodyHeight() - listH - 1
+	if detailH < 4 {
+		// Too short to show two panes: the list gets the whole block.
+		return m.list.View(m.st, ls, m.width, m.bodyHeight(), m.focus == focusList)
+	}
 	listPane := m.list.View(m.st, ls, m.width, listH, m.focus == focusList)
-	detailPane := m.detail.View(m.st, sel, m.width, detailH, m.focus == focusDetail)
+	detailPane := m.detail.View(m.st, sel, replayed, m.width, detailH, m.focus == focusDetail)
 	return lipgloss.JoinVertical(lipgloss.Left, listPane, blankLine(m.width), detailPane)
+}
+
+// replayStatuses projects replayByID into the ID→status map the list
+// badges consume.
+func (m *Model) replayStatuses() map[string]int {
+	out := make(map[string]int, len(m.replayByID))
+	for id, info := range m.replayByID {
+		out[id] = info.res.StatusCode
+	}
+	return out
+}
+
+// replayFor returns the replay outcome attached to sel, if any.
+func (m *Model) replayFor(sel *delivery.Delivery) *replayInfo {
+	if sel == nil {
+		return nil
+	}
+	if info, ok := m.replayByID[sel.ID]; ok {
+		return &info
+	}
+	return nil
 }
 
 // diffView replaces the detail pane while reviewing an edited payload.
@@ -173,13 +216,23 @@ func (m *Model) statusLine() string {
 	if t := m.toast; t != nil {
 		left = m.renderToast(*t)
 	}
-	right := m.st.StatusDim.Render(fmt.Sprintf("v%s %s %d deliveries", m.cfg.Version, style.GlyphBullet, len(m.items)))
+	// The right side always shows where r would send: the target deserves
+	// to be visible, not remembered.
+	rightParts := []string{"v" + m.cfg.Version}
+	if m.target != "" {
+		rightParts = append(rightParts, "→ "+strings.TrimPrefix(m.target, "http://"))
+	}
+	rightParts = append(rightParts, fmt.Sprintf("%d deliveries", len(m.items)))
+	right := m.st.StatusDim.Render(strings.Join(rightParts, " "+style.GlyphBullet+" "))
+	if lipgloss.Width(right) >= m.width {
+		// Ultra-narrow terminals: shrink the right side before clamping.
+		right = m.st.TruncateEnd(right, max(8, m.width-lipgloss.Width(left)-1))
+	}
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 		if w := m.width - lipgloss.Width(right) - 1; w > 0 {
 			left = m.st.TruncateEnd(left, w)
-			gap = 1
 		}
 	}
 	return left + strings.Repeat(" ", gap) + right

@@ -86,7 +86,8 @@ func renderDiff(st style.Styles, oldBody, newBody []byte, width int) string {
 		b.WriteString(ln)
 		b.WriteString("\n")
 	}
-	return b.String()
+	// Long edited lines (minified JSON, base64) must wrap, never overflow.
+	return st.Wrap(b.String(), width)
 }
 
 func splitLines(s string) []string {

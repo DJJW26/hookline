@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/reflow/wordwrap"
+	hardwrap "github.com/muesli/reflow/wrap"
 )
 
 // jsonKind classifies JSON tokens for colouring.
@@ -210,13 +211,21 @@ func tokenizeJSON(src string) []jsonToken {
 	return toks
 }
 
-// wrap breaks ANSI-coloured text at width without splitting escape
-// sequences. Width <= 0 returns the text unchanged.
+// wrap breaks ANSI-coloured text at width: word wrap first for nice
+// breaks, then a hard wrap so unbreakable runs (a 2000-char token, a long
+// hex line) can never exceed the width. Width <= 0 returns the text
+// unchanged.
 func wrap(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	return wordwrap.String(s, width)
+	return hardwrap.String(wordwrap.String(s, width), width)
+}
+
+// Wrap re-exposes the ANSI-safe wrap for callers outside the package
+// (the diff view needs the same guarantees).
+func (s Styles) Wrap(text string, width int) string {
+	return wrap(text, width)
 }
 
 // TruncateEnd shortens a single line (possibly ANSI-coloured) to width,

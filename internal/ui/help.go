@@ -13,7 +13,10 @@ import (
 // pure view. Narrow terminals fall back to a single column.
 type helpModel struct{}
 
-// View renders the help panel sized to fit within width×height.
+// View renders the help panel sized to fit within width×height. When the
+// rows cannot fit the height, blank separators go first, then the tail is
+// cut with a pointer to the README — the overlay must never overflow the
+// frame.
 func (helpModel) View(st style.Styles, width, height int) string {
 	keyW := 0
 	for _, sec := range helpSections {
@@ -36,6 +39,7 @@ func (helpModel) View(st style.Styles, width, height int) string {
 	if n := len(rows); n > 0 && rows[n-1][0] == "" {
 		rows = rows[:n-1]
 	}
+	rows = fitHelpRows(st, rows, height-4) // minus panel padding (2) + border (2)
 
 	var panel string
 	if twoColumnFits(rows, width) {
@@ -53,6 +57,31 @@ func (helpModel) View(st style.Styles, width, height int) string {
 	return panel
 }
 
+// fitHelpRows drops blank separators, then tail rows, until the help fits
+// avail lines.
+func fitHelpRows(st style.Styles, rows [][]string, avail int) [][]string {
+	if avail < 3 {
+		avail = 3
+	}
+	for len(rows) > avail {
+		cut := false
+		for i, r := range rows {
+			if r[0] == "" {
+				rows = append(rows[:i], rows[i+1:]...)
+				cut = true
+				break
+			}
+		}
+		if cut {
+			continue
+		}
+		rows = rows[:avail-1]
+		rows = append(rows, []string{st.Empty.Render("… more in README")})
+		break
+	}
+	return rows
+}
+
 // twoColumnFits reports whether splitting rows side-by-side stays within
 // width, using the widest row as the column estimate.
 func twoColumnFits(rows [][]string, width int) bool {
@@ -65,8 +94,8 @@ func twoColumnFits(rows [][]string, width int) bool {
 			widest = n
 		}
 	}
-	// 2 columns + 3-space gap + panel padding (1,3).
-	return widest*2+3+6 <= width
+	// 2 columns + 3-space gap + panel padding (1,3) + border (2).
+	return widest*2+3+8 <= width
 }
 
 func columnBlock(rows [][]string) string {

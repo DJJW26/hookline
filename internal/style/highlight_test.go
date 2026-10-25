@@ -157,3 +157,15 @@ func TestJSONLongStringKeyDetection(t *testing.T) {
 		t.Errorf("value mangled: %q", plain)
 	}
 }
+
+func TestWrapBreaksUnbreakableRuns(t *testing.T) {
+	// A 2000-character token with no spaces must hard-wrap, never blow the
+	// frame width (regression: wordwrap alone passes long runs through).
+	s := New(mustLookup(t, "mono"))
+	out := s.Plain([]byte(strings.Repeat("x", 2000)), 60)
+	for i, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > 60 {
+			t.Fatalf("line %d width %d exceeds 60", i, w)
+		}
+	}
+}
