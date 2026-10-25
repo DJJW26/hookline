@@ -117,5 +117,8 @@ the product spec and `docs/ARCHITECTURE.md` for how it works. Roadmap:
 built-in Cloudflare quick tunnel, side-by-side delivery diffing, in-TUI
 body editor, `--json` headless mode.
 
+Releases are automated on tags (GoReleaser); the demo GIF is rendered by
+`.vhs/demo.tape`.
+
 MIT licensed. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 and [Lip Gloss](https://github.com/charmbracelet/lipgloss).

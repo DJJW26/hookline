@@ -1,0 +1,61 @@
+version: 2
+
+project_name: hookline
+
+builds:
+  - id: hookline
+    main: ./cmd/hookline
+    binary: hookline
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+      - docs/ARCHITECTURE.md
+
+checksum:
+  algorithm: sha256
+
+release:
+  draft: false
+
+changelog:
+  sort: asc
+  use: git
+
+scoops:
+  - repository:
+      owner: DJJW26
+      name: scoop-bucket
+
+# The DJJW26/homebrew-tap repository (like the DJJW26/scoop-bucket repo
+# above) must exist before the first tagged release; GoReleaser pushes the
+# formula/cask manifest into it and fails the publish step otherwise.
+# Note: brews publishes a Homebrew formula; GoReleaser soft-deprecated it
+# in favor of homebrew_casks (v2.10) — same tap, swap the section name to
+# migrate.
+brews:
+  - repository:
+      owner: DJJW26
+      name: homebrew-tap
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
