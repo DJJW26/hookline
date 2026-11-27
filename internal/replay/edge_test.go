@@ -117,7 +117,7 @@ func TestToCurlQuotingCorners(t *testing.T) {
 	}
 	got := ToCurl("http://localhost:4040", d)
 	for _, want := range []string{
-		"curl -X POST",
+		"curl --globoff -X 'POST'",
 		`'http://localhost:4040/q?name=O'\''Brien & Co'`,
 		`'X-Note: it'\''s quoted'`,
 		`'{"s":"single '\'' and \" double"}'`,

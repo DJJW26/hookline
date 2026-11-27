@@ -49,14 +49,14 @@ func newTestApp(t *testing.T, initial []delivery.Delivery) *Model {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := make(chan delivery.Delivery, 8)
+	events := make(chan CaptureEvent, 8)
 	clearedFlag = false
 	m := New(Config{
 		Version:   "test",
 		ListenURL: "http://127.0.0.1:4040",
 		Events:    events,
 		Initial:   initial,
-		OnClear:   func() { clearedFlag = true },
+		OnClear:   func() (uint64, error) { clearedFlag = true; return 0, nil },
 	}, style.New(theme), theme)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	return m
@@ -107,7 +107,7 @@ func TestEmptyStateShowsCurl(t *testing.T) {
 func TestLiveDeliveryAppears(t *testing.T) {
 	m := newTestApp(t, nil)
 	d := testDelivery("POST", "/stripe/events", `{"type":"payment"}`)
-	model, _ := m.Update(deliveryMsg(d))
+	model, _ := m.Update(CaptureEvent{Delivery: d})
 	*m = *model.(*Model)
 	if len(m.items) != 1 {
 		t.Fatalf("items = %d, want 1", len(m.items))
@@ -309,6 +309,30 @@ func TestEditorDoneEntersDiffAndDiscard(t *testing.T) {
 	sendKey(t, m, "esc")
 	if m.mode != modeNormal || m.pending != nil {
 		t.Error("esc should discard the edit")
+	}
+}
+
+func TestTruncatedCaptureCannotReplayOrExportAfterEditing(t *testing.T) {
+	in := testDelivery("POST", "/hooks/x", `{"count":`)
+	in.Truncated = true
+	m := newTestApp(t, []delivery.Delivery{in})
+	m.target = "http://localhost:3000"
+
+	sendKey(t, m, "c")
+	if m.toast == nil || !strings.Contains(m.toast.text, "before exporting cURL") {
+		t.Fatal("copy should explain why export is unavailable")
+	}
+	m.toast = nil
+	m.Update(editorDoneMsg{d: in, body: []byte(`{"count":2}`)})
+	if m.pending == nil || !m.pending.next.Truncated {
+		t.Fatal("edit should retain the truncation flag")
+	}
+	if view := m.View(); !strings.Contains(view, "Replay unavailable") || strings.Contains(view, "send edited") {
+		t.Fatal("diff should warn about truncation and hide the send hint")
+	}
+	sendKey(t, m, "s")
+	if m.toast == nil || !strings.Contains(m.toast.text, "before replaying") {
+		t.Fatal("send should explain why replay is unavailable")
 	}
 }
 
@@ -564,7 +588,7 @@ func TestSessionBytesTracksRunningCounter(t *testing.T) {
 	var want int
 	for i, b := range bodies {
 		d := testDelivery("POST", fmt.Sprintf("/c/%d", i), b)
-		model, _ := m.Update(deliveryMsg(d))
+		model, _ := m.Update(CaptureEvent{Delivery: d})
 		*m = *model.(*Model)
 		want += len(d.Body)
 		if m.sessionBytes != want {
@@ -598,7 +622,7 @@ func TestEvictOldDropsCachesWithOldest(t *testing.T) {
 	var ids []string // newest first, matching items order
 	for i := 0; i < 3; i++ {
 		d := testDelivery("POST", fmt.Sprintf("/e/%d", i), fmt.Sprintf(`{"i":%d}`, i))
-		model, _ := m.Update(deliveryMsg(d))
+		model, _ := m.Update(CaptureEvent{Delivery: d})
 		*m = *model.(*Model)
 		ids = append([]string{d.ID}, ids...)
 	}
@@ -669,7 +693,7 @@ func TestConfirmClearResetsCounterAndCaches(t *testing.T) {
 	in := testDelivery("POST", "/p", `{"a":1}`)
 	m := newTestApp(t, []delivery.Delivery{in})
 	d := testDelivery("POST", "/q", strings.Repeat("x", 32))
-	model, _ := m.Update(deliveryMsg(d))
+	model, _ := m.Update(CaptureEvent{Delivery: d})
 	*m = *model.(*Model)
 	m.haystack(m.items[0])
 	m.replayByID[in.ID] = replayInfo{target: "http://127.0.0.1:9999"}

@@ -130,24 +130,30 @@ func (s *Store) Clear() error {
 	if s.f == nil {
 		return fmt.Errorf("store: %s is closed", s.path)
 	}
-	if err := s.w.Flush(); err != nil {
+	// The append handle cannot truncate on Windows. Truncate through a
+	// separate handle so a failure leaves the existing store open.
+	writable, err := os.OpenFile(s.path, os.O_WRONLY, 0)
+	if err != nil {
 		return fmt.Errorf("store: clear %s: %w", s.path, err)
 	}
-	// Windows denies truncating through an append-mode handle, so close,
-	// truncate by path, and reopen.
-	closeErr := s.f.Close()
-	s.f = nil
-	truncErr := os.Truncate(s.path, 0)
-	f, openErr := os.OpenFile(s.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
-	if openErr == nil {
-		s.f = f
-		s.w = bufio.NewWriter(f)
+	defer writable.Close()
+	appendInfo, err := s.f.Stat()
+	if err != nil {
+		return fmt.Errorf("store: clear %s: %w", s.path, err)
 	}
-	for _, err := range []error{closeErr, truncErr, openErr} {
-		if err != nil {
-			return fmt.Errorf("store: clear %s: %w", s.path, err)
-		}
+	writeInfo, err := writable.Stat()
+	if err != nil {
+		return fmt.Errorf("store: clear %s: %w", s.path, err)
 	}
+	if !os.SameFile(appendInfo, writeInfo) {
+		return fmt.Errorf("store: clear %s: history file was replaced", s.path)
+	}
+	if err := writable.Truncate(0); err != nil {
+		return fmt.Errorf("store: clear %s: %w", s.path, err)
+	}
+	// An earlier append may have left buffered bytes and a sticky error.
+	// A successful clear discards both and keeps the handle for future appends.
+	s.w.Reset(s.f)
 	return nil
 }
 

@@ -41,8 +41,7 @@ func wantStripeHeader(key []byte, t time.Time, body []byte) string {
 
 func TestDoSigningOverridesCapturedSignature(t *testing.T) {
 	body := []byte(`{"edited":true,"n":2}`)
-	rawStripeKey := []byte("stripe-raw-key-bytes")
-	whsec := "whsec_" + base64.StdEncoding.EncodeToString(rawStripeKey)
+	whsec := "whsec_stripe-replay-test"
 	githubSecret := "gh-secret-42"
 	shopifySecret := "shpss-42"
 
@@ -61,11 +60,11 @@ func TestDoSigningOverridesCapturedSignature(t *testing.T) {
 			want:       wantStripeHeader([]byte("rk_live_bare"), sigTS, body),
 		},
 		{
-			name:       "stripe whsec_ secret equals decoded raw key",
+			name:       "stripe uses the full whsec_ secret",
 			opt:        WithSigning(sign.Params{Provider: "stripe", Secret: whsec, Time: sigTS}),
 			sigHeader:  "Stripe-Signature",
 			staleValue: "t=1,v1=deadbeef",
-			want:       wantStripeHeader(rawStripeKey, sigTS, body),
+			want:       wantStripeHeader([]byte(whsec), sigTS, body),
 		},
 		{
 			name:       "github",

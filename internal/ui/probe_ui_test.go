@@ -35,9 +35,9 @@ func probeApp(t *testing.T, initial []delivery.Delivery, tweak func(*Config)) *M
 	cfg := Config{
 		Version:   "test",
 		ListenURL: "http://127.0.0.1:4040",
-		Events:    make(chan delivery.Delivery, 8),
+		Events:    make(chan CaptureEvent, 8),
 		Initial:   initial,
-		OnClear:   func() { clearedFlag = true },
+		OnClear:   func() (uint64, error) { clearedFlag = true; return 0, nil },
 	}
 	if tweak != nil {
 		tweak(&cfg)
@@ -284,7 +284,7 @@ func TestProbeSelectionIntegrityAfter500Burst(t *testing.T) {
 	m := newTestApp(t, []delivery.Delivery{seed})
 	wantSel := m.list.selectedID
 	for i := 0; i < 500; i++ {
-		model, _ := m.Update(deliveryMsg(testDelivery("POST", fmt.Sprintf("/burst/%03d", i), `{}`)))
+		model, _ := m.Update(CaptureEvent{Delivery: testDelivery("POST", fmt.Sprintf("/burst/%03d", i), `{}`)})
 		*m = *model.(*Model)
 	}
 	if len(m.items) != 501 || len(m.visible()) != 501 {
@@ -831,7 +831,7 @@ func TestProbeUnreadMarkerWithSelection(t *testing.T) {
 	a := testDelivery("POST", "/a", `{}`)
 	m := newTestApp(t, []delivery.Delivery{a})
 	// A second, unread delivery arrives while /a stays selected.
-	model, _ := m.Update(deliveryMsg(testDelivery("GET", "/fresh", `{}`)))
+	model, _ := m.Update(CaptureEvent{Delivery: testDelivery("GET", "/fresh", `{}`)})
 	*m = *model.(*Model)
 	if m.list.selectedID != a.ID {
 		t.Fatal("arrival should not steal selection")
@@ -981,7 +981,7 @@ func TestProbeClearThenBurstRebuildsCaches(t *testing.T) {
 		t.Fatalf("clear left residue: items=%d unread=%d", len(m.items), len(m.list.unread))
 	}
 	for i := 0; i < 20; i++ {
-		model, _ := m.Update(deliveryMsg(testDelivery("POST", fmt.Sprintf("/n/%d", i), `{}`)))
+		model, _ := m.Update(CaptureEvent{Delivery: testDelivery("POST", fmt.Sprintf("/n/%d", i), `{}`)})
 		*m = *model.(*Model)
 	}
 	if len(m.visible()) != 20 {

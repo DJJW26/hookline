@@ -11,9 +11,6 @@ import (
 // activity, replay results, editor round-trips) lands here so Update stays
 // a pure message reducer.
 
-// deliveryMsg carries one freshly captured delivery from the listener.
-type deliveryMsg delivery.Delivery
-
 // deliveriesDoneMsg is sent when the events channel closes.
 type deliveriesDoneMsg struct{}
 
@@ -22,6 +19,7 @@ type deliveriesDoneMsg struct{}
 // can say so.
 type replayResultMsg struct {
 	d        delivery.Delivery
+	target   string
 	res      replay.Result
 	err      error
 	resigned string
@@ -80,16 +78,24 @@ const (
 type mode int
 
 const (
-	modeNormal  mode = iota
-	modeSearch       // typing in the find input
-	modeTarget       // typing a replay target
-	modeDiff         // reviewing an edited payload before resending
-	modeConfirm      // confirming a destructive action
-	modeHelp         // help overlay
+	modeNormal        mode = iota
+	modeSearch             // typing in the find input
+	modeTarget             // typing a replay target
+	modeDiff               // reviewing an edited payload before resending
+	modeConfirm            // confirming a destructive action
+	modeReplayConfirm      // confirming one specific remote send
+	modeHelp               // help overlay
 )
 
 // pendingEdit holds an edited delivery awaiting confirmation in modeDiff.
 type pendingEdit struct {
 	orig delivery.Delivery
 	next delivery.Delivery
+}
+
+// pendingReplay binds confirmation to the captured request and target.
+type pendingReplay struct {
+	delivery delivery.Delivery
+	target   string
+	edit     *pendingEdit
 }

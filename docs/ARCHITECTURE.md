@@ -43,13 +43,15 @@ the core, not the other way round.
    client aborting mid-body is the one exception: the read errors, the
    handler answers 400 and records NOTHING — a torn capture is noise,
    not signal.
-3. The callback does two things, in order: `store.Append` (flush-to-disk
-   before anything else — a crash never loses a capture) and a
-   non-blocking push into a 1024-slot channel (drop instead of blocking
-   if the UI has exited).
+3. The callback attempts `store.Append`, then pushes the delivery and save
+   outcome into a 1024-slot channel without blocking for the UI. The HTTP
+   status acknowledges receipt. The status bar counts failed saves
+   separately from live updates dropped when the channel is full.
 4. The UI's `waitForDelivery` command — re-armed after every message —
-   turns the channel read into a `deliveryMsg`. `Update` prepends it to
-   the model (newest first), marks it unread, re-arms the pump.
+   returns a `CaptureEvent`. `Update` prepends the capture to the model
+   (newest first), marks it unread or unsaved, and re-arms the pump. A
+   successful history clear advances the capture generation, so older
+   events still queued for the UI do not restore cleared deliveries.
 5. `View` renders the frame. Rendering is cached per
    `(delivery ID, tab, width, replayed)` so a 5 MiB body is tokenized
    once, and only its first 100 KiB is ever rendered per frame.
@@ -92,7 +94,8 @@ sub-models, following the Elm architecture: messages in, new state out,
 `tea.ExecProcess` while `$EDITOR` runs (`notepad` on Windows, `vi`
 elsewhere). The edited file comes back as an `editorDoneMsg`; if it
 differs, the app enters `diff` mode — a theme-colored LCS line diff —
-where `s` replays the edited copy (with a fresh ID) and `esc` discards.
+where `s` replays the edited copy and `esc` discards. The original delivery's
+Response tab shows the latest replay result, including an edited send.
 
 ## The theme system
 
@@ -146,10 +149,10 @@ One JSON object per line in `hookline.jsonl` (bodies base64 via
  "src_ip":"127.0.0.1","response_status":200}
 ```
 
-Appends flush per line; `LoadLast(n)` scans the file through a ring
-buffer and skips any corrupt/torn line, so a crash mid-write costs at
-most one delivery. On Windows, `Clear` closes the handle before
-truncating (append-mode handles deny truncation there). Nothing is
+Appends flush per line. `LoadLast(n)` scans the file through a ring
+buffer and skips corrupt or torn lines. `Clear` truncates with a separate
+write handle to support Windows append-mode rules and resets the buffered
+writer after truncation succeeds. Nothing is
 destroyed by `--fresh`: `Rotate` renames the history aside as
 `hookline-YYYYMMDD-HHMMSS.jsonl`, keeps the five most recent backups
 (oldest pruned) and starts a fresh file. The replay target persists

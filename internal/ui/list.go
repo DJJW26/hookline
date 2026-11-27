@@ -31,6 +31,7 @@ type listState struct {
 	filter    string // "" or a live filter description
 	listenURL string
 	replays   map[string]int // delivery ID → last replay status, for row badges
+	unsaved   map[string]bool
 }
 
 // markUnread flags a delivery as new.
@@ -169,7 +170,8 @@ func (l *listModel) View(st style.Styles, s listState, w, h int, focused bool) s
 		}
 		end := min(l.offset+contentH, len(s.items))
 		for i := l.offset; i < end; i++ {
-			rows = append(rows, renderRow(st, s.items[i], i == sel, focused, l.unread[s.items[i].ID], s.replays[s.items[i].ID], inner))
+			d := s.items[i]
+			rows = append(rows, renderRow(st, d, i == sel, focused, l.unread[d.ID], s.unsaved[d.ID], s.replays[d.ID], inner))
 		}
 	}
 	body := strings.Join(rows, "\n")
@@ -196,8 +198,8 @@ func listNote(s listState) string {
 	return strings.Join(parts, " · ")
 }
 
-func renderRow(st style.Styles, d *delivery.Delivery, selected, focused, isNew bool, replayStatus int, width int) string {
-	row := renderRowContent(st, d, isNew, replayStatus, width)
+func renderRow(st style.Styles, d *delivery.Delivery, selected, focused, isNew, unsaved bool, replayStatus int, width int) string {
+	row := renderRowContent(st, d, isNew, unsaved, replayStatus, width)
 	if selected {
 		if focused {
 			row = st.RowSelectedLive.Render(row)
@@ -210,10 +212,13 @@ func renderRow(st style.Styles, d *delivery.Delivery, selected, focused, isNew b
 	return st.TruncateEnd(row, width)
 }
 
-func renderRowContent(st style.Styles, d *delivery.Delivery, isNew bool, replayStatus int, width int) string {
+func renderRowContent(st style.Styles, d *delivery.Delivery, isNew, unsaved bool, replayStatus int, width int) string {
 	markCol := " "
 	if isNew {
 		markCol = st.Unread.Render(style.GlyphUnread)
+	}
+	if unsaved {
+		markCol = st.ToastWarn.Render("!")
 	}
 	timeCol := st.RowTime.Render(dayTime(d.TS))
 	method := st.Method(d.Method).Render(methodLabel(d.Method))

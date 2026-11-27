@@ -3,26 +3,127 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GORELEASER_VERSION: v2.20.3
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history so the goreleaser changelog (use: git) can diff
-          # against the previous tag.
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: stable
-      - uses: goreleaser/goreleaser-action@v6
+          go-version-file: go.mod
+      - name: Build archives
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+          version: ${{ env.GORELEASER_VERSION }}
+          args: ${{ github.ref_type == 'tag' && 'release --skip=publish,changelog,announce --clean' || 'release --snapshot --clean' }}
+      - name: Verify archive checksums
+        working-directory: dist
+        run: |
+          test "$(wc -l < checksums.txt)" -eq 6
+          for platform in windows darwin linux; do
+            for arch in amd64 arm64; do
+              extension=tar.gz
+              if [ "$platform" = windows ]; then extension=zip; fi
+              grep -Fq "  hookline_${platform}_${arch}.${extension}" checksums.txt
+            done
+          done
+          sha256sum --check --strict checksums.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hookline-archives
+          path: |
+            dist/hookline_*.tar.gz
+            dist/hookline_*.zip
+            dist/checksums.txt
+            dist/metadata.json
+          if-no-files-found: error
+
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: amd64
+            extension: tar.gz
+            binary: hookline
+          - runner: macos-latest
+            platform: darwin
+            arch: arm64
+            extension: tar.gz
+            binary: hookline
+          - runner: windows-latest
+            platform: windows
+            arch: amd64
+            extension: zip
+            binary: hookline.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: hookline-archives
+          path: archives
+      - name: Check and run native archive
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE: hookline_${{ matrix.platform }}_${{ matrix.arch }}.${{ matrix.extension }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $archive = Join-Path archives $env:ARCHIVE
+          $expectedHash = Get-Content archives/checksums.txt | ForEach-Object {
+            $hash, $name = $_ -split '\s+', 2
+            if ($name -eq $env:ARCHIVE) { $hash }
+          }
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash -ne $expectedHash) {
+            throw "Archive checksum mismatch for $env:ARCHIVE"
+          }
+          New-Item -ItemType Directory -Path native | Out-Null
+          tar -xf $archive -C native
+          $binary = Join-Path native $env:BINARY
+          $version = (Get-Content archives/metadata.json -Raw | ConvertFrom-Json).version
+          if ((& $binary --version) -ne "hookline v$version") {
+            throw 'Installed executable reported the wrong version'
+          }
+          & $binary --help
+
+  checks:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [smoke, checks]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: hookline-archives
+          path: archives
+      - name: Publish verified archives
+        working-directory: archives
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum --check --strict checksums.txt
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
+            hookline_*.tar.gz hookline_*.zip checksums.txt

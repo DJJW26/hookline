@@ -10,9 +10,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/listener"
+	"github.com/DJJW26/hookline/internal/store"
 )
 
 // capturedReq snapshots everything the test server received.
@@ -23,6 +27,71 @@ type capturedReq struct {
 	host    string
 	headers http.Header
 	body    []byte
+}
+
+func TestDoRejectsTruncatedCaptures(t *testing.T) {
+	var calls atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+	}))
+	defer target.Close()
+
+	t.Run("listener cap", func(t *testing.T) {
+		captures := make(chan delivery.Delivery, 1)
+		ln, err := listener.Start(listener.Config{
+			MaxBodyBytes: 4,
+			OnDelivery:   func(d delivery.Delivery) { captures <- d },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		defer ln.Stop(ctx)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, ln.URL()+"/hook", strings.NewReader("abcde"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		select {
+		case d := <-captures:
+			if _, err := Do(ctx, target.URL, d); !errors.Is(err, ErrTruncatedBody) {
+				t.Fatalf("replay error = %v, want ErrTruncatedBody", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("listener did not capture request")
+		}
+	})
+
+	t.Run("storage cap", func(t *testing.T) {
+		st, err := store.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		original := delivery.Delivery{
+			ID: delivery.NewID(), Method: http.MethodPost, Path: "/hook",
+			Body: bytes.Repeat([]byte{'x'}, store.MaxBodyBytes+1),
+		}
+		if err := st.Append(original); err != nil {
+			t.Fatal(err)
+		}
+		history, err := st.LoadLast(1)
+		if err != nil || len(history) != 1 {
+			t.Fatalf("load returned %d deliveries, error %v", len(history), err)
+		}
+		if _, err := Do(t.Context(), target.URL, history[0]); !errors.Is(err, ErrTruncatedBody) {
+			t.Fatalf("replay error = %v, want ErrTruncatedBody", err)
+		}
+	})
+
+	if got := calls.Load(); got != 0 {
+		t.Errorf("target received %d requests, want none", got)
+	}
 }
 
 // captureServer returns a test server that snapshots the last request.
@@ -178,7 +247,7 @@ func TestToCurl(t *testing.T) {
 			baseURL: "http://localhost:3000",
 			d:       jsonD,
 			contains: []string{
-				"-X POST",
+				"-X 'POST'",
 				"'http://localhost:3000/hook?x=1'",
 				"-H 'Content-Type: application/json'",
 				"-H 'X-Api-Key: k-123'",
@@ -215,7 +284,7 @@ func TestToCurl(t *testing.T) {
 				Path:   "/ping",
 			},
 			contains: []string{
-				"-X GET",
+				"-X 'GET'",
 				"'http://localhost:3000/ping'",
 			},
 			notContains: []string{"--data-binary"},

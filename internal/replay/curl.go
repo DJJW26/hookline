@@ -9,16 +9,20 @@ import (
 )
 
 // ToCurl renders d as a one-line cURL command targeting baseURL+path+query,
-// ready to copy and paste into a shell. Header values, the URL and the body
-// are single-quoted with embedded quotes escaped POSIX-style. Binary bodies
+// ready to paste into a POSIX shell. Request arguments are single-quoted
+// with embedded quotes escaped. Binary bodies
 // are not inlined; the command carries a trailing comment instructing the
-// user to save the body and pass it via --data-binary @file.
+// user to save the body and pass it via --data-binary @file. For a truncated
+// capture, ToCurl returns only a comment explaining why export is unavailable.
 func ToCurl(baseURL string, d delivery.Delivery) string {
+	if d.Truncated {
+		return "# cURL export unavailable: captured body was truncated. Capture the full request and try again."
+	}
 	var sb strings.Builder
-	sb.WriteString("curl -X ")
-	sb.WriteString(d.Method)
-	sb.WriteString(" ")
-	sb.WriteString(shellQuote(strings.TrimSuffix(baseURL, "/") + d.URL()))
+	sb.WriteString("curl --globoff -X ")
+	sb.WriteString(shellQuote(d.Method))
+	sb.WriteString(" --url ")
+	sb.WriteString(shellQuote(RequestURL(baseURL, d)))
 	for _, name := range sortedHeaderNames(d.Headers) {
 		for _, v := range d.Headers[name] {
 			sb.WriteString(" -H ")
@@ -32,7 +36,11 @@ func ToCurl(baseURL string, d delivery.Delivery) string {
 		return sb.String()
 	}
 	if len(d.Body) > 0 {
-		sb.WriteString(" --data-binary ")
+		if d.Body[0] == '@' {
+			sb.WriteString(" --data-raw ")
+		} else {
+			sb.WriteString(" --data-binary ")
+		}
 		sb.WriteString(shellQuote(string(d.Body)))
 	}
 	return sb.String()

@@ -5,6 +5,7 @@ package replay
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,9 @@ import (
 // MaxResultBody caps how much of the replay target's response is kept for
 // display: enough for stack traces and error JSON, never enough to hurt.
 const MaxResultBody = 16 << 10
+
+// ErrTruncatedBody reports that replay requires a complete capture.
+var ErrTruncatedBody = errors.New("body was truncated — capture the complete request before replaying")
 
 // config is the mutable option set applied by the functional options.
 type config struct {
@@ -67,6 +71,11 @@ var client = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
+// RequestURL returns the URL used to replay d to the supplied base target.
+func RequestURL(target string, d delivery.Delivery) string {
+	return strings.TrimSuffix(target, "/") + d.URL()
+}
+
 // Do re-sends d to target (e.g. http://localhost:3000) using d's method,
 // path, query, headers and body, honoring ctx cancellation. Headers that are
 // hop-by-hop or transport-owned (Host, Content-Length, Connection,
@@ -76,13 +85,17 @@ var client = &http.Client{
 // original signature never survives. Transport-level failures and signing
 // failures are returned as errors — a signing failure never falls back to
 // an unsigned send; HTTP error statuses are reported via Result.StatusCode
-// with a nil error.
+// with a nil error. A truncated delivery returns ErrTruncatedBody before
+// building or sending the request.
 func Do(ctx context.Context, target string, d delivery.Delivery, opts ...Option) (Result, error) {
+	if d.Truncated {
+		return Result{}, ErrTruncatedBody
+	}
 	var cfg config
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	full := strings.TrimSuffix(target, "/") + d.URL()
+	full := RequestURL(target, d)
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, d.Method, full, bytes.NewReader(d.Body))
 	if err != nil {

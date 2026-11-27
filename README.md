@@ -3,18 +3,10 @@
 A local-first webhook inspector that lives in your terminal. Run one
 binary, point webhooks at it, and watch deliveries land in a fast,
 keyboard-driven TUI — inspect pretty JSON, replay to your dev server, edit
-payloads and resend, or copy any delivery as a cURL command. Nothing leaves
+payloads and resend, or copy a complete delivery as a cURL command. Nothing leaves
 your machine unless you press replay.
 
-```
-◆ hookline                                        ⏺ listening · 127.0.0.1:4040
-╭ deliveries ──────────────────── 1 ─╮ ╭ body · POST /hooks/github · 7B ────╮
-│  23:17:58 POST  /e2e/hook  43B json │ │ {                                    │
-│                                    │ │   "event": "payment.succeeded",     │
-│                                    │ │   "amount": 4200                     │
-╰────────────────────────────────────╯ ╰──────────────────────────────────────╯
- j k select · tab pane · r replay · e edit · c curl · / find     vdev · 1 deliveries
-```
+![Hookline captures a test webhook, reviews an edited amount, and displays the replay response](docs/demo.gif)
 
 ## Why
 
@@ -32,27 +24,37 @@ binary, and it blends into whatever terminal you already customized.
 - **Inspect fast** — syntax-highlighted JSON, aligned headers, raw bytes,
   auto-response; unread markers for new arrivals; live search (`/`, matches
   headers too) and method filter (`f`).
-- **Replay & edit** — resend a delivery byte-identical to any target (`r`),
+- **Replay & edit** — resend a complete delivery to a target (`r`),
   round-trip the body through `$EDITOR` with a diff review, then send (`e`).
   The target's answer lands in the response tab; toasts are colored by
-  status class. Non-loopback targets ask for a confirming second `r`, and
-  the target persists to `config.json` between runs.
+  status class. Each non-loopback replay shows the destination and request
+  for confirmation with uppercase `Y`. The target persists to `config.json`
+  between runs.
 - **Signature re-signing** — signature re-signing for Stripe, GitHub and
   Shopify so replays verify: start with `--sign stripe` and
   `HOOKLINE_SIGN_SECRET` and every resend (edited bodies included) carries
   a fresh signature. A missing secret refuses to send — never unsigned.
-- **Export** — copy any delivery as a shell-safe cURL command (`c`) or the
-  raw body (`y`). Copies use OSC 52, so they work inside SSH sessions.
+- **Export** — copy a complete delivery as a POSIX-shell cURL command (`c`) or copy the
+  available raw body (`y`). Replay and cURL export require a complete capture.
+  Copies use OSC 52, so they work inside SSH sessions.
 - **Persistent** — history survives restarts as JSONL on disk
   (`--fresh` rotates it aside to `hookline-<timestamp>.jsonl`, keeping 5,
-  instead of deleting).
+  instead of deleting). The listener’s HTTP status acknowledges receipt.
+  Check the TUI for save failures. A `!` beside a live delivery marks a
+  failed save, and the status bar counts save failures separately from
+  dropped live updates.
 - **Blend in** — transparent backgrounds, auto dark/light detection,
   truecolor with graceful degradation to 256/16/mono, `NO_COLOR` respected,
   window title set on start. Your terminal's theme shows through, not ours.
 
 ## Install
 
-Requires Go 1.27+:
+Download the archive for your operating system and architecture from
+[GitHub Releases](https://github.com/DJJW26/hookline/releases/latest).
+Extract it and run `hookline --version` (`.\hookline.exe --version` in
+PowerShell). The release includes a SHA-256 checksum file.
+
+To install with Go 1.27.2 or newer:
 
     go install github.com/DJJW26/hookline/cmd/hookline@latest
 
@@ -63,13 +65,9 @@ Or build from a checkout:
 
 ## Quickstart
 
-    hookline                          # listens on http://127.0.0.1:4040
-    curl -X POST http://127.0.0.1:4040/test -d '{"hello":"world"}'
-
-For real providers (Stripe, GitHub, …), expose the listener with any tunnel
-you like — `cloudflared tunnel --url http://127.0.0.1:4040`,
-`ngrok http 4040` — and point the webhook at the public URL. A built-in
-tunnel is on the roadmap.
+- [Capture and replay a sample locally](docs/RECIPES.md#local-quickstart) with shell and PowerShell commands.
+- [Replay an edited Stripe event with signature verification](docs/RECIPES.md#stripe-cli-with-signature-verification).
+- [Capture and replay GitHub webhooks through an existing tunnel](docs/RECIPES.md#github-webhook-over-a-tunnel).
 
 ## Keys
 
@@ -105,20 +103,19 @@ registry entries, so adding one is a single struct.
 History is JSONL in `%LOCALAPPDATA%\hookline` (Windows) or
 `$XDG_DATA_HOME/hookline` (elsewhere); override with `HOOKLINE_DATA_DIR`.
 The replay target lives in `config.json` next to it. With `--sign`, the
-webhook secret comes from `HOOKLINE_SIGN_SECRET` (`whsec_…` Stripe secrets
-are decoded automatically). Copies fall back to
+webhook secret comes from `HOOKLINE_SIGN_SECRET`. For Stripe, use the full
+endpoint secret, including the `whsec_` prefix. Copies fall back to
 `HOOKLINE_CLIP_CMD` (e.g. `clip.exe`, `wl-copy`) on terminals without
 OSC 52.
 
 ## Status
 
-v0.1.1 — working MVP, hardened per `docs/FINDINGS.md`. See `SPEC.md` for
-the product spec and `docs/ARCHITECTURE.md` for how it works. Roadmap:
-built-in Cloudflare quick tunnel, side-by-side delivery diffing, in-TUI
-body editor, `--json` headless mode.
+See [the workplan](docs/WORKPLAN.md) for release work and pilot goals, and
+[the architecture](docs/ARCHITECTURE.md) for how Hookline works.
 
-Releases are automated on tags (GoReleaser); the demo GIF is rendered by
-`.vhs/demo.tape`.
+Tagged builds are packaged with GoReleaser. The demo uses only localhost
+and a test payload. To record the walkthrough with VHS, run
+`vhs .vhs/demo.tape` from the repository root.
 
 MIT licensed. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 and [Lip Gloss](https://github.com/charmbracelet/lipgloss).

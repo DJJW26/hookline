@@ -11,6 +11,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 )
@@ -24,9 +26,15 @@ type Params struct {
 	Time     time.Time
 }
 
+var providers = map[string]func(Params, []byte) (map[string]string, error){
+	"github":  computeGitHub,
+	"shopify": computeShopify,
+	"stripe":  computeStripe,
+}
+
 // Supported lists the providers Compute knows, alphabetically.
 func Supported() []string {
-	return []string{"github", "shopify", "stripe"}
+	return slices.Sorted(maps.Keys(providers))
 }
 
 // Compute signs body for p.Provider and returns the headers to SET
@@ -34,53 +42,35 @@ func Supported() []string {
 // an empty secret is an error: a replay that asked for signing must never
 // go out carrying the captured delivery's stale signature.
 func Compute(p Params, body []byte) (map[string]string, error) {
-	switch p.Provider {
-	case "stripe":
-		return computeStripe(p, body)
-	case "github":
-		key, err := rawKey(p)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]string{
-			"X-Hub-Signature-256": "sha256=" + hexSig(key, body),
-		}, nil
-	case "shopify":
-		key, err := rawKey(p)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]string{
-			"X-Shopify-Hmac-SHA256": base64.StdEncoding.EncodeToString(hmacSHA256(key, body)),
-		}, nil
-	default:
+	compute, ok := providers[p.Provider]
+	if !ok {
 		return nil, fmt.Errorf("sign: unknown provider %q (supported: %s)",
 			p.Provider, strings.Join(Supported(), ", "))
 	}
+	if p.Secret == "" {
+		return nil, fmt.Errorf("sign: %s: empty secret", p.Provider)
+	}
+	return compute(p, body)
+}
+
+func computeGitHub(p Params, body []byte) (map[string]string, error) {
+	return map[string]string{
+		"X-Hub-Signature-256": "sha256=" + hex.EncodeToString(hmacSHA256([]byte(p.Secret), body)),
+	}, nil
+}
+
+func computeShopify(p Params, body []byte) (map[string]string, error) {
+	return map[string]string{
+		"X-Shopify-Hmac-SHA256": base64.StdEncoding.EncodeToString(hmacSHA256([]byte(p.Secret), body)),
+	}, nil
 }
 
 // computeStripe signs the Stripe wire format: the header value is
 // "t=<unix seconds>,v1=<hex>" where v1 is HMAC-SHA256 over "<t>.<body>".
-// A "whsec_"-prefixed secret carries the key base64-encoded; a bare secret
-// is used as raw bytes.
+// The full endpoint secret, including any "whsec_" prefix, is the HMAC key.
 func computeStripe(p Params, body []byte) (map[string]string, error) {
-	secret := p.Secret
-	if secret == "" {
-		return nil, fmt.Errorf("sign: stripe: empty secret")
-	}
-	key := []byte(secret)
-	if rest, ok := strings.CutPrefix(secret, "whsec_"); ok {
-		decoded, err := base64.StdEncoding.DecodeString(rest)
-		if err != nil {
-			return nil, fmt.Errorf("sign: stripe: decoding whsec_ secret: %w", err)
-		}
-		if len(decoded) == 0 {
-			return nil, fmt.Errorf("sign: stripe: whsec_ secret decodes to an empty key")
-		}
-		key = decoded
-	}
 	t := p.Time.Unix()
-	mac := hmac.New(sha256.New, key)
+	mac := hmac.New(sha256.New, []byte(p.Secret))
 	fmt.Fprintf(mac, "%d.", t)
 	mac.Write(body)
 	return map[string]string{
@@ -88,23 +78,9 @@ func computeStripe(p Params, body []byte) (map[string]string, error) {
 	}, nil
 }
 
-// rawKey returns the signing key for providers that use the secret bytes
-// as-is (GitHub, Shopify), rejecting an empty secret.
-func rawKey(p Params) ([]byte, error) {
-	if p.Secret == "" {
-		return nil, fmt.Errorf("sign: %s: empty secret", p.Provider)
-	}
-	return []byte(p.Secret), nil
-}
-
 // hmacSHA256 is HMAC-SHA256(key, body) in one slice.
 func hmacSHA256(key, body []byte) []byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write(body)
 	return mac.Sum(nil)
-}
-
-// hexSig hex-encodes HMAC-SHA256(key, body).
-func hexSig(key, body []byte) string {
-	return hex.EncodeToString(hmacSHA256(key, body))
 }

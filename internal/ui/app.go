@@ -22,16 +22,25 @@ import (
 	"github.com/DJJW26/hookline/internal/style"
 )
 
+// CaptureEvent carries a live delivery and the outcome of saving it to history.
+// HistoryGeneration advances after each successful clear.
+type CaptureEvent struct {
+	Delivery          delivery.Delivery
+	HistoryError      error
+	HistoryGeneration uint64
+}
+
 // Config wires the app to its environment. Everything here is injectable,
 // which is what keeps the UI testable without a terminal or a network.
 type Config struct {
 	Version    string
 	ListenURL  string // "" when not listening (offline viewing mode)
-	Events     <-chan delivery.Delivery
+	Events     <-chan CaptureEvent
 	Initial    []delivery.Delivery
-	Target     string              // default replay target ("" = unset)
-	OnClear    func()              // persists a clear request (wired to the store)
-	TargetSave func(target string) // persists a new replay target (wired to config.json)
+	Target     string                 // default replay target ("" = unset)
+	OnClear    func() (uint64, error) // clears history and returns the new generation
+	TargetSave func(target string)    // persists a new replay target (wired to config.json)
+	replayDo   func(context.Context, string, delivery.Delivery, ...replay.Option) (replay.Result, error)
 	// SignProvider enables signature re-signing on replay (from --sign):
 	// "" disables it; otherwise one of the internal/sign providers. When
 	// set, SignSecret (from HOOKLINE_SIGN_SECRET) must be too — a replay
@@ -43,6 +52,8 @@ type Config struct {
 	// status line shows the count whenever it is non-zero — drops are
 	// surfaced, never silent.
 	Dropped *atomic.Int64
+	// HistoryWriteFailures counts all failed saves, even if the UI queue was full.
+	HistoryWriteFailures *atomic.Int64
 }
 
 // Model is the root Bubble Tea model.
@@ -51,10 +62,12 @@ type Model struct {
 	st    style.Styles
 	theme style.Theme
 
-	items  []*delivery.Delivery // newest first
-	list   listModel
-	detail detailModel
-	help   helpModel
+	items             []*delivery.Delivery // newest first
+	list              listModel
+	detail            detailModel
+	help              helpModel
+	unsaved           map[string]bool
+	historyGeneration uint64
 
 	// sessionBytes is the running total of body bytes held in items,
 	// maintained incrementally by the delivery path and evictOld so the
@@ -80,14 +93,11 @@ type Model struct {
 	// (row badges + the response tab); bounded by replayMaxEntries.
 	replayByID map[string]replayInfo
 
-	// confirmRemote gates the first replay to a non-loopback target so a
-	// production-ish URL is never sent to silently.
-	confirmRemote bool
-
-	target     string
-	pending    *pendingEdit
-	toast      *toast
-	pendingOSC string
+	target        string
+	pending       *pendingEdit
+	pendingReplay *pendingReplay
+	toast         *toast
+	pendingOSC    string
 
 	width, height int
 }
@@ -112,6 +122,9 @@ const searchBodyCap = 64 << 10
 
 // New constructs the app model.
 func New(cfg Config, st style.Styles, theme style.Theme) *Model {
+	if cfg.replayDo == nil {
+		cfg.replayDo = replay.Do
+	}
 	items := make([]*delivery.Delivery, 0, len(cfg.Initial)+16)
 	// Newest first: reverse the chronological initial load.
 	var seeded int
@@ -133,6 +146,7 @@ func New(cfg Config, st style.Styles, theme style.Theme) *Model {
 		searchCache:  map[string]string{},
 		replayByID:   map[string]replayInfo{},
 		visibleDirty: true,
+		unsaved:      map[string]bool{},
 	}
 	if len(items) > 0 {
 		m.list.selectedID = items[0].ID // reset selection to the newest delivery
@@ -165,19 +179,20 @@ func (m *Model) evictOld() {
 		m.list.forget(old.ID)
 		delete(m.detail.prettyCache, old.ID)
 		delete(m.replayByID, old.ID)
+		delete(m.unsaved, old.ID)
 	}
 	m.visibleDirty = true
 }
 
 // waitForDelivery turns channel reads into messages; re-armed after every
 // delivery so the pump never stalls.
-func waitForDelivery(ch <-chan delivery.Delivery) tea.Cmd {
+func waitForDelivery(ch <-chan CaptureEvent) tea.Cmd {
 	return func() tea.Msg {
 		d, ok := <-ch
 		if !ok {
 			return deliveriesDoneMsg{}
 		}
-		return deliveryMsg(d)
+		return d
 	}
 }
 
@@ -204,13 +219,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 
-	case deliveryMsg:
-		d := delivery.Delivery(msg)
+	case CaptureEvent:
+		wait := waitForDelivery(m.cfg.Events)
+		if msg.HistoryGeneration < m.historyGeneration {
+			return m, wait
+		}
+		d := msg.Delivery
 		m.items = append([]*delivery.Delivery{&d}, m.items...)
 		m.sessionBytes += len(d.Body)
 		m.list.markUnread(d.ID)
+		if msg.HistoryError != nil {
+			m.unsaved[d.ID] = true
+		}
 		m.evictOld()
-		return m, waitForDelivery(m.cfg.Events)
+		if msg.HistoryError != nil {
+			return m, tea.Batch(wait, m.showToast(toastBad, "captured live · save failed", d.Method+" "+d.URL()+" · "+msg.HistoryError.Error()))
+		}
+		return m, wait
 
 	case deliveriesDoneMsg:
 		return m, nil
@@ -261,6 +286,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateDiff(msg)
 	case modeConfirm:
 		return m.updateConfirm(msg)
+	case modeReplayConfirm:
+		return m.updateReplayConfirm(msg)
 	case modeHelp:
 		return m.updateHelp(msg)
 	}
@@ -409,7 +436,7 @@ func (m *Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Enter submitted the prompt.
 	if m.mode == modeTarget {
 		m.target = normalizeTarget(strings.TrimSpace(m.input.Value()))
-		m.confirmRemote = false // new target restarts the remote guard
+		m.pendingReplay = nil
 		if m.cfg.TargetSave != nil && m.target != "" {
 			m.cfg.TargetSave(m.target)
 		}
@@ -439,7 +466,7 @@ func (m *Model) updateDiff(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pending = nil
 		m.mode = modeNormal
 		if p != nil {
-			return m, m.replaySelected(p.next)
+			return m, m.prepareReplay(p.next, p)
 		}
 	case "esc":
 		m.pending = nil
@@ -448,10 +475,57 @@ func (m *Model) updateDiff(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) updateReplayConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	p := m.pendingReplay
+	if p == nil {
+		m.mode = modeNormal
+		return m, nil
+	}
+	if p.target != m.target {
+		m.cancelReplay(p)
+		return m, nil
+	}
+	switch msg.String() {
+	case "Y":
+		if _, fits := m.replayConfirmLines(p); fits {
+			m.pendingReplay = nil
+			m.mode = modeNormal
+			return m, m.sendReplay(p.delivery, p.target)
+		}
+	case "n", "N", "esc":
+		m.cancelReplay(p)
+	case "q", "ctrl+c":
+		m.cancelReplay(p)
+		return m, tea.Quit
+	case "t":
+		m.cancelReplay(p)
+		if p.edit == nil {
+			return m.updateNormal(msg)
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) cancelReplay(p *pendingReplay) {
+	m.pendingReplay = nil
+	m.mode = modeNormal
+	if p.edit != nil {
+		m.pending = p.edit
+		m.mode = modeDiff
+	}
+}
+
 func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y", "enter":
 		m.mode = modeNormal
+		if m.cfg.OnClear != nil {
+			generation, err := m.cfg.OnClear()
+			if err != nil {
+				return m, m.showToast(toastBad, "clear failed", err.Error())
+			}
+			m.historyGeneration = generation
+		}
 		m.items = nil
 		m.sessionBytes = 0 // the bodies it tracks are gone
 		m.list = newListModel()
@@ -459,9 +533,7 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detail.prettyCache = map[string]string{}
 		m.replayByID = map[string]replayInfo{}
 		m.visibleDirty = true
-		if m.cfg.OnClear != nil {
-			m.cfg.OnClear()
-		}
+		clear(m.unsaved)
 		return m, m.showToast(toastNeutral, "", "cleared")
 	case "n", "N", "esc":
 		m.mode = modeNormal
@@ -531,7 +603,7 @@ func (m *Model) applyReplayResult(msg replayResultMsg) (tea.Model, tea.Cmd) {
 	if len(m.replayByID) >= replayMaxEntries {
 		m.replayByID = map[string]replayInfo{}
 	}
-	m.replayByID[msg.d.ID] = replayInfo{target: m.target, res: msg.res}
+	m.replayByID[msg.d.ID] = replayInfo{target: msg.target, res: msg.res}
 	m.detail.cacheKey = "" // response tab content changed
 
 	kind := toastGood
@@ -557,23 +629,23 @@ func (m *Model) applyEditorDone(msg editorDoneMsg) (tea.Model, tea.Cmd) {
 	if string(msg.body) == string(msg.d.Body) {
 		return m, m.showToast(toastNeutral, "", "no changes")
 	}
-	next := msg.d
+	next := msg.d // keep the original ID so its row shows the replay response
 	next.Body = msg.body
-	next.Truncated = false
-	next.ID = delivery.NewID() // edited copy, distinct identity in cache keys
+	m.pendingReplay = nil
 	m.pending = &pendingEdit{orig: msg.d, next: next}
 	m.mode = modeDiff
 	return m, nil
 }
 
-// replaySelected sends a delivery to the configured target. A non-loopback
-// target demands one confirming keypress first — the guard against
-// reflexively firing a production payload somewhere unexpected. When
-// signing is configured (cfg.SignProvider) the replay is re-signed for
-// that provider; a configured provider with a missing secret refuses to
-// send at all — an unsigned replay against a signature-verifying provider
-// is exactly the tampered request the provider will reject.
 func (m *Model) replaySelected(d delivery.Delivery) tea.Cmd {
+	return m.prepareReplay(d, nil)
+}
+
+// prepareReplay checks the request and prompts before sending to a remote host.
+func (m *Model) prepareReplay(d delivery.Delivery, edit *pendingEdit) tea.Cmd {
+	if d.Truncated {
+		return m.showToast(toastWarn, "", replay.ErrTruncatedBody.Error())
+	}
 	if m.target == "" {
 		return m.showToast(toastWarn, "", "no replay target — press t to set one")
 	}
@@ -581,25 +653,31 @@ func (m *Model) replaySelected(d delivery.Delivery) tea.Cmd {
 		return m.showToast(toastWarn, "", "--sign "+m.cfg.SignProvider+
 			" is set but HOOKLINE_SIGN_SECRET is empty — replay not sent")
 	}
-	if !isLocalTarget(m.target) && !m.confirmRemote {
-		m.confirmRemote = true
-		return m.showToast(toastWarn, "", m.target+" is not local — press r again to send")
+	if !isLocalTarget(replay.RequestURL(m.target, d)) {
+		m.pendingReplay = &pendingReplay{delivery: d, target: m.target, edit: edit}
+		m.mode = modeReplayConfirm
+		m.toast = nil
+		return nil
 	}
-	target := m.target
-	var opts []replay.Option
-	if m.cfg.SignProvider != "" {
-		opts = append(opts, replay.WithSigning(sign.Params{
-			Provider: m.cfg.SignProvider,
-			Secret:   m.cfg.SignSecret,
-			Time:     time.Now(),
-		}))
-	}
-	resigned := m.cfg.SignProvider
+	return m.sendReplay(d, m.target)
+}
+
+func (m *Model) sendReplay(d delivery.Delivery, target string) tea.Cmd {
+	provider, secret := m.cfg.SignProvider, m.cfg.SignSecret
+	do := m.cfg.replayDo
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		res, err := replay.Do(ctx, target, d, opts...)
-		return replayResultMsg{d: d, res: res, err: err, resigned: resigned}
+		var opts []replay.Option
+		if provider != "" {
+			opts = append(opts, replay.WithSigning(sign.Params{
+				Provider: provider,
+				Secret:   secret,
+				Time:     time.Now(),
+			}))
+		}
+		res, err := do(ctx, target, d, opts...)
+		return replayResultMsg{d: d, target: target, res: res, err: err, resigned: provider}
 	}
 }
 
@@ -618,6 +696,9 @@ func isLocalTarget(target string) bool {
 }
 
 func (m *Model) copyCurl(d delivery.Delivery) tea.Cmd {
+	if d.Truncated {
+		return m.showToast(toastWarn, "", "body was truncated — capture the complete request before exporting cURL")
+	}
 	base := m.cfg.ListenURL
 	if m.target != "" {
 		base = m.target

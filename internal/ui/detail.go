@@ -154,7 +154,7 @@ func (d *detailModel) renderBody(st style.Styles, sel *delivery.Delivery, replay
 func (d *detailModel) renderBodyTab(st style.Styles, sel *delivery.Delivery, width int) string {
 	var b strings.Builder
 	if sel.Truncated {
-		b.WriteString(st.Note.Render("body was truncated when captured") + "\n")
+		b.WriteString(st.Note.Render("body was truncated") + "\n")
 	}
 	switch sel.Kind() {
 	case delivery.KindEmpty:

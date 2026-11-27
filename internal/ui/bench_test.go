@@ -56,19 +56,19 @@ func BenchmarkIngestEvict(b *testing.B) {
 	if err != nil {
 		b.Fatalf("lookup dark theme: %v", err)
 	}
-	events := make(chan delivery.Delivery, 8)
+	events := make(chan CaptureEvent, 8)
 	m := New(Config{Version: "bench", Events: events}, style.New(theme), theme)
 	body := make([]byte, 1<<20) // 1 MiB: 256 of these reach the cap
 	seq := 0
 	deliver := func() {
-		model, _ := m.Update(deliveryMsg(delivery.Delivery{
+		model, _ := m.Update(CaptureEvent{Delivery: delivery.Delivery{
 			ID:             delivery.NewID(),
 			TS:             time.Date(2026, 10, 24, 9, 30, 0, 0, time.UTC),
 			Method:         "POST",
 			Path:           fmt.Sprintf("/ingest/%d", seq),
 			Body:           body,
 			ResponseStatus: 200,
-		}))
+		}})
 		m = model.(*Model)
 		seq++
 	}
@@ -101,7 +101,7 @@ func BenchmarkViewFrame(b *testing.B) {
 	if err != nil {
 		b.Fatalf("lookup dark theme: %v", err)
 	}
-	events := make(chan delivery.Delivery, 8)
+	events := make(chan CaptureEvent, 8)
 	m := New(Config{
 		Version:   "bench",
 		ListenURL: "http://127.0.0.1:4040",
@@ -110,7 +110,7 @@ func BenchmarkViewFrame(b *testing.B) {
 	model, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = model.(*Model)
 	for i := 0; i < 100; i++ {
-		model, _ = m.Update(deliveryMsg(mixedDelivery(i)))
+		model, _ = m.Update(CaptureEvent{Delivery: mixedDelivery(i)})
 		m = model.(*Model)
 	}
 	if len(m.items) != 100 {

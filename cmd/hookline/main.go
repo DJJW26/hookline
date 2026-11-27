@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,7 +53,7 @@ func run() error {
 		status  = flag.Int("status", 200, "status code the listener replies with")
 		target  = flag.String("target", "", "default replay target, e.g. http://localhost:3000")
 		themeID = flag.String("theme", "auto", "theme: auto, "+strings.Join(style.IDs(), ", "))
-		signP   = flag.String("sign", "", "re-sign replayed bodies for a provider: stripe, github, shopify")
+		signP   = flag.String("sign", "", "re-sign replayed bodies for a provider: "+strings.Join(sign.Supported(), ", "))
 		fresh   = flag.Bool("fresh", false, "start with an empty history")
 		showVer = flag.Bool("version", false, "print version and exit")
 	)
@@ -108,38 +109,27 @@ func run() error {
 		_ = saveConfig(dataDir, cfgFile) // best effort; a read-only dir is not fatal
 	}
 
-	events := make(chan delivery.Delivery, 1024)
-	var dropped atomic.Int64
-	capture := func(d delivery.Delivery) {
-		// Persist first so a crash never loses a delivery; then hand it to
-		// the UI, dropping rather than blocking if the UI has exited. Drops
-		// are counted and surfaced by the UI's status line — never silent.
-		_ = st.Append(d)
-		select {
-		case events <- d:
-		default:
-			dropped.Add(1)
-		}
-	}
+	captures := &captureHistory{store: st, events: make(chan ui.CaptureEvent, 1024)}
 
 	ln, err := listener.Start(listener.Config{
 		Host:       *bind,
 		Port:       *port,
 		Status:     *status,
-		OnDelivery: capture,
+		OnDelivery: captures.record,
 	})
 	if err != nil {
 		return fmt.Errorf("listening on %s:%d: %w (is the port taken? try --port)", *bind, *port, err)
 	}
 
 	model := ui.New(ui.Config{
-		Version:   version,
-		ListenURL: ln.URL(),
-		Events:    events,
-		Initial:   history,
-		Target:    targetURL,
-		Dropped:   &dropped,
-		OnClear:   func() { _ = st.Clear() },
+		Version:              version,
+		ListenURL:            ln.URL(),
+		Events:               captures.events,
+		Initial:              history,
+		Target:               targetURL,
+		Dropped:              &captures.dropped,
+		HistoryWriteFailures: &captures.writeFailures,
+		OnClear:              captures.clear,
 		TargetSave: func(t string) {
 			cfgFile.Target = t
 			_ = saveConfig(dataDir, cfgFile)
@@ -161,8 +151,43 @@ func run() error {
 	if err := ln.Stop(ctx); err != nil {
 		return fmt.Errorf("stopping listener: %w", err)
 	}
-	close(events)
+	close(captures.events)
 	return nil
+}
+
+// captureHistory serializes append-and-enqueue with clear so a queued
+// delivery always belongs to the same generation as its history write.
+type captureHistory struct {
+	mu            sync.Mutex
+	store         *store.Store
+	events        chan ui.CaptureEvent
+	generation    uint64
+	dropped       atomic.Int64
+	writeFailures atomic.Int64
+}
+
+func (h *captureHistory) record(d delivery.Delivery) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	err := h.store.Append(d)
+	if err != nil {
+		h.writeFailures.Add(1)
+	}
+	select {
+	case h.events <- ui.CaptureEvent{Delivery: d, HistoryError: err, HistoryGeneration: h.generation}:
+	default:
+		h.dropped.Add(1)
+	}
+}
+
+func (h *captureHistory) clear() (uint64, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := h.store.Clear(); err != nil {
+		return h.generation, err
+	}
+	h.generation++
+	return h.generation, nil
 }
 
 // checkSignProvider validates the --sign flag value at startup: unknown

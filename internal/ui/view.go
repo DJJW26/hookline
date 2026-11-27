@@ -2,11 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/DJJW26/hookline/internal/delivery"
+	"github.com/DJJW26/hookline/internal/replay"
 	"github.com/DJJW26/hookline/internal/style"
 )
 
@@ -122,6 +124,13 @@ func (m *Model) headerLine() string {
 // bodyView lays out the panes (or the diff review panel). The help overlay
 // is rendered by View directly and never reaches here.
 func (m *Model) bodyView() string {
+	if m.mode == modeReplayConfirm && m.pendingReplay != nil {
+		lines, _ := m.replayConfirmLines(m.pendingReplay)
+		for len(lines) < m.bodyHeight() {
+			lines = append(lines, "")
+		}
+		return strings.Join(lines, "\n")
+	}
 	if m.bodyHeight() < 3 {
 		// No pane fits: fill the block with blanks so the frame stays
 		// exactly the terminal height.
@@ -136,6 +145,7 @@ func (m *Model) bodyView() string {
 		filter:    m.filterLabel(),
 		listenURL: m.cfg.ListenURL,
 		replays:   m.replayStatuses(),
+		unsaved:   m.unsaved,
 	}
 	sel := m.selection()
 	replayed := m.replayFor(sel)
@@ -157,6 +167,23 @@ func (m *Model) bodyView() string {
 	listPane := m.list.View(m.st, ls, m.width, listH, m.focus == focusList)
 	detailPane := m.detail.View(m.st, sel, replayed, m.width, detailH, m.focus == focusDetail)
 	return lipgloss.JoinVertical(lipgloss.Left, listPane, blankLine(m.width), detailPane)
+}
+
+// replayConfirmLines reports whether the full request and destination fit on screen.
+func (m *Model) replayConfirmLines(p *pendingReplay) ([]string, bool) {
+	kind, id := "captured", p.delivery.ID
+	if p.edit != nil {
+		kind, id = "edited", p.edit.orig.ID
+	}
+	summary := fmt.Sprintf("Remote replay · %s %s · %s · %d bytes", kind,
+		strconv.QuoteToASCII(id), strconv.QuoteToASCII(p.delivery.Method), p.delivery.Size())
+	url := strconv.QuoteToASCII(replay.RequestURL(p.target, p.delivery))
+	text := summary + "\n" + url + "\nY send · esc cancel"
+	lines := strings.Split(m.st.Wrap(text, m.width), "\n")
+	if len(lines) <= m.bodyHeight() && m.width > 0 {
+		return lines, true
+	}
+	return []string{m.st.TruncateEnd("Resize to review · esc cancel", m.width)}, false
 }
 
 // replayStatuses projects replayByID into the ID→status map the list
@@ -188,6 +215,10 @@ func (m *Model) diffView() string {
 	inner := m.width - 2
 	titleLine := title + strings.Repeat(" ", max(0, inner-lipgloss.Width(title)-lipgloss.Width(note))) + note
 	content := renderDiff(m.st, p.orig.Body, p.next.Body, inner)
+	if p.next.Truncated {
+		warning := m.st.Note.Render("Body was truncated. Replay unavailable.")
+		content = m.st.TruncateEnd(warning, inner) + "\n" + content
+	}
 	lines := strings.Split(content, "\n")
 	viewH := m.bodyHeight() - 3
 	for len(lines) < viewH {
@@ -226,14 +257,24 @@ func (m *Model) statusLine() string {
 	right := m.st.StatusDim.Render(strings.Join(rightParts, " "+style.GlyphBullet+" "))
 	// Captures dropped under backpressure are never silent: the live count
 	// rides the status line in the warning color, re-read every frame.
+	var warnings []string
 	if m.cfg.Dropped != nil {
 		if n := m.cfg.Dropped.Load(); n > 0 {
-			right += " " + style.GlyphBullet + " " + m.st.ToastWarn.Render(fmt.Sprintf("%d dropped", n))
+			warnings = append(warnings, fmt.Sprintf("%d dropped", n))
 		}
+	}
+	if m.cfg.HistoryWriteFailures != nil {
+		if n := m.cfg.HistoryWriteFailures.Load(); n > 0 {
+			warnings = append(warnings, fmt.Sprintf("save errors %d", n))
+		}
+	}
+	if len(warnings) > 0 {
+		separator := " " + style.GlyphBullet + " "
+		right = m.st.ToastWarn.Render(strings.Join(warnings, separator)) + separator + right
 	}
 	if lipgloss.Width(right) >= m.width {
 		// Ultra-narrow terminals: shrink the right side before clamping.
-		right = m.st.TruncateEnd(right, max(8, m.width-lipgloss.Width(left)-1))
+		right = m.st.TruncateEnd(right, max(1, m.width-2))
 	}
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -270,6 +311,9 @@ func (m *Model) hints() string {
 			m.st.StatusKey.Render("y") + m.st.Status.Render(" confirm ") +
 			m.st.StatusKey.Render("esc") + m.st.Status.Render(" cancel")
 	case modeDiff:
+		if m.pending != nil && m.pending.next.Truncated {
+			return m.st.StatusKey.Render("esc") + m.st.Status.Render(" discard")
+		}
 		return m.st.StatusKey.Render("s") + m.st.Status.Render(" send edited ") +
 			m.st.StatusKey.Render("esc") + m.st.Status.Render(" discard")
 	case modeSearch:

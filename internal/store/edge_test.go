@@ -13,6 +13,66 @@ import (
 // Edge-case probes: corrupt interior lines, append-after-clear, LoadLast
 // bounds, and concurrent Append racing Clear.
 
+func TestClearRecoversFromFailedAppend(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(delivery.Delivery{ID: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := os.Open(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	s.w.Reset(readOnly)
+	if err := s.Append(delivery.Delivery{ID: "failed"}); err == nil {
+		t.Fatal("expected an error writing to the read-only handle")
+	}
+	if err := s.Clear(); err != nil {
+		t.Fatalf("clear should discard the failed write: %v", err)
+	}
+	if err := s.Append(delivery.Delivery{ID: "new"}); err != nil {
+		t.Fatalf("append after clear should work: %v", err)
+	}
+	got, err := s.LoadLast(2)
+	if err != nil || len(got) != 1 || got[0].ID != "new" {
+		t.Fatalf("history after clear and new append = %v, error %v", got, err)
+	}
+}
+
+func TestClearRefusesToTruncateDifferentFile(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(delivery.Delivery{ID: "original"}); err != nil {
+		t.Fatal(err)
+	}
+	// Point the path at another file while the append handle remains open.
+	// This exercises a replaced path on Windows too, where the OS can deny
+	// renaming the open history file itself.
+	s.path = filepath.Join(dir, "replacement.jsonl")
+	if err := os.WriteFile(s.path, []byte("replacement"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Clear(); err == nil || !strings.Contains(err.Error(), "history file was replaced") {
+		t.Fatalf("clear with different on-disk file = %v, want file replacement error", err)
+	}
+	replacement, err := os.ReadFile(s.path)
+	if err != nil || string(replacement) != "replacement" {
+		t.Fatalf("replacement should be unchanged, got %q, error %v", replacement, err)
+	}
+	got, err := s.LoadLast(1)
+	if err != nil || len(got) != 1 || got[0].ID != "original" {
+		t.Fatalf("original history = %v, error %v", got, err)
+	}
+}
+
 func TestLoadLastSkipsCorruptInteriorLines(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)

@@ -17,11 +17,12 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
+      - -X main.version=v{{ .Version }}
 
 archives:
   - formats:
       - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
         formats:
@@ -30,32 +31,13 @@ archives:
       - README.md
       - LICENSE
       - docs/ARCHITECTURE.md
+      - docs/RECIPES.md
+      - docs/WORKPLAN.md
+      - docs/demo.gif
 
 checksum:
   algorithm: sha256
-
-release:
-  draft: false
-
-changelog:
-  sort: asc
-  use: git
-
-scoops:
-  - repository:
-      owner: DJJW26
-      name: scoop-bucket
-
-# The DJJW26/homebrew-tap repository (like the DJJW26/scoop-bucket repo
-# above) must exist before the first tagged release; GoReleaser pushes the
-# formula/cask manifest into it and fails the publish step otherwise.
-# Note: brews publishes a Homebrew formula; GoReleaser soft-deprecated it
-# in favor of homebrew_casks (v2.10) — same tap, swap the section name to
-# migrate.
-brews:
-  - repository:
-      owner: DJJW26
-      name: homebrew-tap
+  name_template: checksums.txt
 
 snapshot:
-  version_template: "{{ .Tag }}-next"
+  version_template: "{{ .Version }}-next"

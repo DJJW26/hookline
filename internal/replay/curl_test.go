@@ -52,6 +52,14 @@ func TestToCurlHeaderFlagsCount(t *testing.T) {
 	}
 }
 
+func TestToCurlKeepsMethodURLAndAtBodyLiteral(t *testing.T) {
+	d := delivery.Delivery{Method: "X'CUSTOM", Path: "/hook", Query: "items=[1-2]", Body: []byte("@literal")}
+	want := `curl --globoff -X 'X'\''CUSTOM' --url 'http://localhost:4040/hook?items=[1-2]' --data-raw '@literal'`
+	if got := ToCurl("http://localhost:4040", d); got != want {
+		t.Fatalf("ToCurl() = %q, want %q", got, want)
+	}
+}
+
 func TestToCurlInvalidUTF8TreatedAsBinary(t *testing.T) {
 	// High-bit invalid UTF-8 must not be stringified (U+FFFD corruption);
 	// it belongs on the @file path.
@@ -64,5 +72,20 @@ func TestToCurlInvalidUTF8TreatedAsBinary(t *testing.T) {
 	got := ToCurl("http://localhost:4040", d)
 	if !strings.Contains(got, "binary body") {
 		t.Errorf("invalid UTF-8 should take the binary path, got %q", got)
+	}
+}
+
+func TestToCurlTruncatedCaptureReturnsOnlyNotice(t *testing.T) {
+	d := delivery.Delivery{
+		Method:    "POST",
+		Path:      "/hooks/partial",
+		Headers:   map[string][]string{"Content-Type": {"application/json"}},
+		Body:      []byte(`{"incomplete":`),
+		Truncated: true,
+	}
+	got := ToCurl("http://localhost:4040", d)
+	want := "# cURL export unavailable: captured body was truncated. Capture the full request and try again."
+	if got != want {
+		t.Errorf("ToCurl on truncated capture = %q, want %q", got, want)
 	}
 }
